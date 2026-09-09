@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>io.github.aullchen</groupId><artifactId>lightning-cipher-pipe</artifactId><version>0.1.0-SNAPSHOT</version><relativePath>../../pom.xml</relativePath></parent>
+  <artifactId>lcp-api</artifactId>
+</project>
