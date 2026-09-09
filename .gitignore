@@ -1,0 +1,9 @@
+/.local-docs/
+**/target/
+.idea/
+.vscode/
+*.iml
+*.log
+/secrets/
+/output/
+/run/
