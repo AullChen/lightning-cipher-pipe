@@ -8,4 +8,4 @@
     <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-core</artifactId></dependency>
     <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><scope>test</scope></dependency>
   </dependencies>
-</project>
+<build><testResources><testResource><directory>../../protocol/vectors</directory><excludes><exclude>*.py</exclude><exclude>*.md</exclude></excludes></testResource></testResources></build></project>
