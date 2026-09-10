@@ -85,3 +85,14 @@ request_json = dict(transferId=str(transfer), routeId='demo', sourceNodeId='sour
 (HERE / 'open.json').write_text(json.dumps(request_json, separators=(',', ':')) + '\n', encoding='ascii', newline='\n')
 (HERE / 'open-reordered.json').write_text(json.dumps(dict(reversed(list(request_json.items()))), indent=2) + '\n', encoding='ascii', newline='\n')
 print('Wrote independent Open/Finish/AAD/hash/frame vectors and two JSON projections.')
+
+# Additional independent tree shapes for the frontier implementation.
+roots = {}
+for count in (0, 1, 3, 5, 7, 8, 13, 65):
+    leaves, offset = [], 0
+    for index in range(count):
+        payload = bytes((index + j) % 256 for j in range(index % 7 + 1))
+        leaves.append(sha(b'\x00' + cbor([index, offset, len(payload), sha(payload)])))
+        offset += len(payload)
+    roots[count] = tree(leaves).hex()
+(HERE / 'merkle.properties').write_text(''.join(f'root.{n}={root}\n' for n, root in roots.items()), encoding='ascii', newline='\n')

@@ -5,7 +5,7 @@
 - `golden.properties`：Policy、Limits、OpenRequest、Accepted、OpenResponse、binding、HPKE info、Chunk/Finish AAD、Cancel、空流/单字节 `00`/三块不等长 Finish 的 CBOR 十六进制及 SHA-256。
 - `open.json` 与 `open-reordered.json`：不同键顺序/空白，必须得到相同 Open 规范字节。
 - 两个完整 frame 仅验证前缀和布局；enc/ciphertext 是明确的合成字节，**不是 HPKE 密码向量，也不能成功解密**。RFC 9180 正式密码向量留给 C04。
-- 三块数据为 `00`、`0102`、`030405`，offset 为 0/1/3，最终长度为 6。参考脚本用递归 RFC 6962 分树计算根；C02 仅验证 Finish 承载与 hash，Java Merkle 实现及 V02 留给 C03。
+- 三块数据为 `00`、`0102`、`030405`，offset 为 0/1/3，最终长度为 6。参考脚本用递归 RFC 6962 分树计算根；C02 仅验证 Finish 承载与 hash，Java Merkle frontier 另以 `merkle.properties` 的 0/1/3/5/7/8/13/65 块独立参考根验证。
 
 人工结构核验：Limits 5 项、Policy 11 项、Open 15 项、Accepted 8 项、Response 3 项、Chunk AAD 8 项、Finish AAD 4 项、Finish 7 项；domain 计入数组项数。帧头 `4+1+1+4+2+4=16` 字节，UUID 为网络序16字节，摘要32字节。
 
