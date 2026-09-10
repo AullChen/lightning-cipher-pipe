@@ -13,7 +13,7 @@
 
 Linux/macOS 对应使用 `./mvnw`（尚未实测）。快速测试入口为 `test`，完整快速构建为 `clean verify`。目前仅创建实际需要的 `modules/api`（JDK-only 公共值对象）和 `modules/core`（协议编码）；其他模块在实现时增加。没有占位测试或网络端点。
 
-本地设计材料 `.local-docs/` 不纳入 Git。实施证据见 [开发进度](docs/development-progress.md)，依赖选择见 [构建基线](docs/build-baseline.md)。
+功能与验证范围见 [实现状态](docs/development-progress.md)，依赖说明见 [构建与依赖](docs/build-baseline.md)。
 
 ## 当前实现：C02
 
