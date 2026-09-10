@@ -1,0 +1,13 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>io.github.aullchen</groupId><artifactId>lightning-cipher-pipe</artifactId><version>0.1.0-SNAPSHOT</version><relativePath>../../pom.xml</relativePath></parent>
+  <artifactId>lcp-transport-http</artifactId>
+  <dependencies>
+    <dependency><groupId>io.github.aullchen</groupId><artifactId>lcp-security</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>org.bouncycastle</groupId><artifactId>bcpkix-jdk18on</artifactId><scope>test</scope></dependency>
+  </dependencies>
+  <build><plugins><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId>
+    <configuration><argLine>-Dsun.net.httpserver.maxReqTime=2 -Dsun.net.httpserver.maxRspTime=2 -Dsun.net.httpserver.timerMillis=100 -Djdk.httpserver.maxConnections=16</argLine></configuration>
+  </plugin></plugins></build>
+</project>

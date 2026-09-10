@@ -1,25 +1,28 @@
 # LightningCipherPipe
 
-轻量化、数据库无关的 Java 17 安全数据交换中间件。研究目标是资源预算下的分块、并发与压缩联合反馈调度；安全传输、持久 ACK、恢复与性能收益尚未实现或验证。
+轻量化、数据库无关的 Java 17 安全数据交换中间件。研究目标是资源预算下的分块、并发与压缩联合反馈调度。当前已实现编码、输入流和认证组件；完整传输、持久 ACK、恢复与性能收益尚待后续阶段验证。
 
 ## 构建
 
-安装 JDK 17，设置 `JAVA_HOME` 并将其 `bin` 放在 PATH 前面。首次构建需要访问 Maven Central。
+使用 JDK 17，通过 Maven Wrapper 构建：
 
-```powershell
-.\mvnw.cmd clean verify
-.\mvnw.cmd -pl modules/core -am dependency:tree
+```sh
+./mvnw clean verify
+./mvnw -pl modules/core -am dependency:tree
 ```
 
-Linux/macOS 对应使用 `./mvnw`（尚未实测）。快速测试入口为 `test`，完整快速构建为 `clean verify`。目前仅创建实际需要的 `modules/api`（JDK-only 公共值对象）和 `modules/core`（协议编码与分块）及 `examples`（输入源适配器）；其他模块在实现时增加。没有占位测试或网络端点。
+Windows 对应使用 `mvnw.cmd`。首次运行需要下载固定版本的 Maven 与依赖。快速测试入口为 `test`，完整快速构建为 `clean verify`。
 
-功能与验证范围见 [实现状态](docs/development-progress.md)，依赖说明见 [构建与依赖](docs/build-baseline.md)。
+## 当前实现
 
-## 当前实现：C03
+| 模块 | 功能 |
+| --- | --- |
+| `lcp-api` | JDK-only 值对象、Chunk、TransferSource |
+| `lcp-core` | 严格 CBOR/JSON、有界帧、按序分块、字节许可、Merkle frontier |
+| `lcp-security` | 固定 HPKE Auth、授权目录、Open 身份与 SPKI 绑定 |
+| `lcp-transport-http` | TLS 1.3 mTLS、节点/主机名校验、有界线程与控制响应、超时 |
+| `lcp-examples` | FileSource 和确定性 GeneratorSource |
 
-- 不可变 Open/Accepted/Policy/Limits、Chunk/Finish AAD、FinishManifest、Receipt、Cancel 元数据。
-- 严格规范 CBOR、Open HTTP JSON 投影、Open/Finish/binding 摘要与 HPKE info 字节编码。
-- 有界 frame 前缀、内存/短读流解析和合成帧编码；先校验前缀与小 AAD，再读取大正文。
-- 独立 [协议向量](protocol/vectors/README.md)，完整快速构建包含 103 项测试。
+全工程包含 154 项自动化测试和独立[协议向量](protocol/vectors/README.md)。当前尚未装配 Open/Chunk/Finish 传输端点、持久输出或恢复，不应将帧认证成功视为传输完成。
 
-帧解析结果仍未认证。后续 HTTP 适配器必须先做 mTLS/路由认证、预算预留并提供有截止时间的有限输入流；HPKE 验证后才能接纳写入。当前没有网络端点、密码实现、文件传输、持久 ACK 或恢复能力。已加入 File/Generator 输入源、按序分块、SHA-256 和 Merkle frontier；下一阶段实现认证组件。
+功能与验证范围见[实现状态](docs/development-progress.md)，依赖说明见[构建与依赖](docs/build-baseline.md)，认证与运行边界见[安全组件](docs/security.md)。

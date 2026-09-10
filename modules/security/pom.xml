@@ -1,0 +1,11 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>io.github.aullchen</groupId><artifactId>lightning-cipher-pipe</artifactId><version>0.1.0-SNAPSHOT</version><relativePath>../../pom.xml</relativePath></parent>
+  <artifactId>lcp-security</artifactId>
+  <dependencies>
+    <dependency><groupId>io.github.aullchen</groupId><artifactId>lcp-core</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>org.bouncycastle</groupId><artifactId>bcprov-jdk18on</artifactId></dependency>
+    <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><scope>test</scope></dependency>
+  </dependencies>
+  <build><testResources><testResource><directory>../../protocol/vectors</directory><includes><include>hpke-rfc9180.properties</include></includes></testResource></testResources></build>
+</project>
