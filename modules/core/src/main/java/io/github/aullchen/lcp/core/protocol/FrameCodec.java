@@ -77,8 +77,13 @@ public final class FrameCodec {
     }
 
     private static byte[] exact(InputStream in, int length) throws IOException {
-        byte[] bytes = in.readNBytes(length);
-        if (bytes.length != length) throw ProtocolException.invalid();
+        byte[] bytes = new byte[length];
+        // Never issue a zero-length transport read at a TLS record boundary.
+        for (int offset = 0; offset < length;) {
+            int n = in.read(bytes, offset, length - offset);
+            if (n <= 0) throw ProtocolException.invalid();
+            offset += n;
+        }
         return bytes;
     }
 

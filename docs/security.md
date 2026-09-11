@@ -20,7 +20,7 @@ JDK HTTP 参考适配器使用固定线程数、有界队列和拒绝策略。�
 
 这些属性由 JDK 读取并缓存，不能在同一 JVM 已创建 HTTP 服务后通过修改系统属性重新配置。该参考适配器面向独立进程；嵌入共享 JVM 时必须协调全局限制。服务端超时会关闭连接，但不能证明业务处理或磁盘写入已经退出。
 
-本实现使用 Java 17 JSSE；未提供早期应用数据（0-RTT）发送路径。HTTP 只提供认证边界和有界控制请求组件，尚未装配 Open/Chunk/Finish 传输端点。HTTP body 配额与核心字节预算仍需在端点装配阶段统一预留。
+本实现使用 Java 17 JSSE；未提供早期应用数据（0-RTT）发送路径。HTTP 已装配固定 NONE 的 Open/Chunk/Finish、状态、receipt 和 Cancel 端点。正文分配前取得字节许可，持有到认证、持久提交或失败退出。协议端点与缓冲边界见[固定策略传输](transfer.md)。
 
 ## 验证与限制
 
@@ -28,6 +28,6 @@ JDK HTTP 参考适配器使用固定线程数、有界队列和拒绝策略。�
 
 证书测试密钥仅存在于测试进程内。仓库中的 RFC 私钥字节是公开标准向量，仅用于测试，不能用于部署。
 
-HPKE 不承诺接收方长期私钥泄露后的历史密文保密。认证成功也不等于持久 ACK 或传输完成；Open 持久接纳、幂等、输出重读、故障恢复和业务导入不属于本阶段交付。
+HPKE 不承诺接收方长期私钥泄露后的历史密文保密。认证成功也不等于持久 ACK 或传输完成：目标在持久写入后确认 receipt，在输出重读和最终承诺一致后发布 COMPLETED。当前具备持久接纳与基本幂等，自动故障恢复和业务导入尚未交付。
 
 参考：[RFC 9180](https://www.rfc-editor.org/rfc/rfc9180)、[Bouncy Castle HPKE API](https://downloads.bouncycastle.org/java/docs/bcprov-jdk18on-javadoc/org/bouncycastle/crypto/hpke/HPKE.html)、[JDK HTTP 服务端配置](https://github.com/openjdk/jdk17u/blob/master/src/jdk.httpserver/share/classes/sun/net/httpserver/ServerConfig.java)。

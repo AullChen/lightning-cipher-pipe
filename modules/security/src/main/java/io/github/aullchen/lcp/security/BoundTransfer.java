@@ -39,6 +39,18 @@ public final class BoundTransfer {
     private static void interval(long min, long initial, long max, long amin, long ainitial, long amax) {
         if (amin < min || amax > max || ainitial != Math.max(amin, Math.min(initial, amax))) throw new AuthenticationException();
     }
+    /** Restore trusted durable facts without granting a new lifetime or changing the binding. */
+    public static BoundTransfer restore(io.github.aullchen.lcp.api.TransferStorage.AcceptedTransfer stored, PeerDirectory directory) {
+        io.github.aullchen.lcp.core.protocol.StorageCodec.validate(stored);
+        return new BoundTransfer(stored, directory);
+    }
+    private BoundTransfer(io.github.aullchen.lcp.api.TransferStorage.AcceptedTransfer stored, PeerDirectory directory) {
+        request = stored.request(); accepted = stored.response().accepted(); this.directory = directory;
+        sourceTls = stored.sourceTlsSpki(); targetTls = stored.targetTlsSpki(); binding = stored.response().bindingHash();
+    }
+    public io.github.aullchen.lcp.api.TransferStorage.AcceptedTransfer stored() {
+        return new io.github.aullchen.lcp.api.TransferStorage.AcceptedTransfer(request, response(), sourceTls, targetTls);
+    }
     public OpenRequest request() { return request; }
     public Accepted accepted() { return accepted; }
     public Bytes32 bindingHash() { return binding; }

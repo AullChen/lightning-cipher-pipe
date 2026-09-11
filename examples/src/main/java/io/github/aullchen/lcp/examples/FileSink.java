@@ -245,6 +245,7 @@ public final class FileSink implements TransferSink {
             Receipt r = new Receipt(transfer.request().transferId(), chunk.index(), chunk.offset(), chunk.plainLength(), chunk.payloadHash());
             Receipt old = receipt(chunk.index());
             if (old != null && old.equals(r) && (active(saved.state()) || saved.state() == State.COMPLETED) && !frozen) return old;
+            if (old != null && saved.state() == State.COMPLETED) throw new TransferException(CHUNK_CONFLICT);
             writable();
             if (old != null) throw new TransferException(CHUNK_CONFLICT);
             validateRange(r);
@@ -277,6 +278,7 @@ public final class FileSink implements TransferSink {
         }
         @Override public synchronized void recordVerifying(FinishManifest f) throws IOException {
             check();
+            if (saved.cancel() != null && saved.cancel().commandId().equals(f.commandId())) throw new TransferException(COMMAND_CONFLICT);
             if (saved.finish() != null) { if (!saved.finish().equals(f)) throw new TransferException(COMMAND_CONFLICT); if (saved.state() == State.VERIFYING || saved.state() == State.COMPLETED) return; }
             writable();
             if (!f.transferId().equals(transfer.request().transferId()) || !f.bindingHash().equals(transfer.response().bindingHash())) throw new TransferException(INVALID_MESSAGE);
@@ -318,5 +320,3 @@ public final class FileSink implements TransferSink {
         catch (java.security.NoSuchAlgorithmException e) { throw new AssertionError(e); }
     }
 }
-
-

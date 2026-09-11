@@ -5,7 +5,6 @@ import io.github.aullchen.lcp.api.Metadata.*;
 import io.github.aullchen.lcp.api.TransferStorage.*;
 import io.github.aullchen.lcp.core.protocol.MetadataCodec;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import java.nio.ByteBuffer;
@@ -16,27 +15,7 @@ import java.util.*;
 import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
 
-class FileSinkTest {
-    @TempDir(factory = StorageTemp.class, cleanup = org.junit.jupiter.api.io.CleanupMode.NEVER) Path root;
-    @org.junit.jupiter.api.AfterEach void cleanup() throws Exception {
-        Path owned = root.toAbsolutePath().normalize();
-        assertTrue(owned.startsWith(Path.of("target", "storage-tests").toAbsolutePath().normalize()));
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (Files.exists(owned)) {
-            try (var paths = Files.walk(owned)) {
-                for (Path p : paths.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(p);
-            } catch (java.io.IOException e) {
-                if (System.nanoTime() >= deadline) throw e;
-                Thread.sleep(25);
-            }
-        }
-    }
-    public static class StorageTemp implements org.junit.jupiter.api.io.TempDirFactory {
-        @Override public Path createTempDirectory(org.junit.jupiter.api.extension.AnnotatedElementContext element,
-                org.junit.jupiter.api.extension.ExtensionContext context) throws Exception {
-            return Files.createTempDirectory(Files.createDirectories(Path.of("target", "storage-tests")), "sink-");
-        }
-    }
+class FileSinkTest extends StorageTestSupport {
     static AcceptedTransfer transfer() {
         UUID id = UUID.randomUUID(); Bytes32 hash = MetadataCodec.hash(new byte[0]);
         Instant now = Instant.parse("2026-09-11T00:00:00Z");
@@ -142,6 +121,3 @@ class FileSinkTest {
         }
     }
 }
-
-
-

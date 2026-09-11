@@ -30,6 +30,16 @@ class FrameCodecTest {
         wrapped.position(5); wrapped.put(expected); wrapped.flip(); wrapped.position(5);
         assertArrayEquals(bytes(frame.ciphertext()), bytes(FrameCodec.decode(wrapped, LIMITS).ciphertext()));
     }
+    @Test void exactTransportReadsNeverRequestZeroBytes() throws IOException {
+        byte[] frame = vector("chunk-frame.hex");
+        var input = new FilterInputStream(new ByteArrayInputStream(frame)) {
+            @Override public int read(byte[] b, int off, int len) throws IOException {
+                assertTrue(len > 0, "Zero-length read can block at a TLS record boundary");
+                return super.read(b, off, len);
+            }
+        };
+        assertEquals(0, FrameCodec.read(input, frame.length, LIMITS).messageType());
+    }
     static byte[] bytes(ByteBuffer buffer) { byte[] b = new byte[buffer.remaining()]; buffer.get(b); return b; }
 
     @ParameterizedTest @CsvSource({"0,0", "4,2", "5,2", "6,255", "10,255", "12,255"})

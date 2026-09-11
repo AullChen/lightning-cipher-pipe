@@ -10,7 +10,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.*;
 
-/** Bounded control-response client. Transfer body streaming will be added with endpoint assembly. */
+/** HTTPS client with bounded request bodies, control responses and total response deadlines. */
 public final class AuthenticatedHttpClient implements AutoCloseable {
     private final HttpClient client;
     private final BoundedExecutor executor;
@@ -28,16 +28,23 @@ public final class AuthenticatedHttpClient implements AutoCloseable {
         @Override public byte[] body() { return body.clone(); }
     }
     public Response get(URI uri, String expectedNode, String route, PeerDirectory directory, int maxBodyBytes) throws IOException, InterruptedException {
+        return exchange(uri, "GET", null, new byte[0], expectedNode, route, directory, maxBodyBytes);
+    }
+    public Response exchange(URI uri, String method, String contentType, byte[] body, String expectedNode,
+                             String route, PeerDirectory directory, int maxBodyBytes) throws IOException, InterruptedException {
+        if (!List.of("GET", "POST", "PUT").contains(method) || body.length > 16 * 1024 * 1024) throw new IllegalArgumentException("Invalid request");
         if (!"https".equalsIgnoreCase(uri.getScheme()) || maxBodyBytes < 0 || maxBodyBytes > 65536) throw new IllegalArgumentException("Invalid HTTPS request bound");
         if (!permits.tryAcquire()) throw new IOException("Client busy");
         try {
-            var request = HttpRequest.newBuilder(uri).timeout(timeout).GET().build();
+            var builder = HttpRequest.newBuilder(uri).timeout(timeout);
+            if (contentType != null) builder.header("Content-Type", contentType);
+            var request = builder.method(method, body.length == 0 ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(body)).build();
             var future = client.sendAsync(request, ignored -> new LimitedBody(maxBodyBytes));
             HttpResponse<byte[]> response;
             try { response = future.get(timeout.toNanos(), TimeUnit.NANOSECONDS); }
             catch (TimeoutException e) { future.cancel(true); throw new HttpTimeoutException("Response deadline exceeded"); }
             catch (InterruptedException e) { future.cancel(true); throw e; }
-            catch (ExecutionException e) { throw new IOException("HTTPS request failed", e.getCause()); }
+            catch (ExecutionException e) { if (e.getCause() instanceof IOException failure) throw failure; throw new IOException("HTTPS request failed", e.getCause()); }
             var session = response.sslSession().orElseThrow(AuthenticationException::new);
             var target = TlsIdentity.peer(session, TlsIdentity.Role.SERVER);
             var source = TlsIdentity.local(session, TlsIdentity.Role.CLIENT);
