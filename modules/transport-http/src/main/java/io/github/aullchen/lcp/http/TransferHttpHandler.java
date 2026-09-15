@@ -15,7 +15,7 @@ import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import static io.github.aullchen.lcp.api.TransferStorage.ErrorCode.*;
 
-/** Fixed NONE, window-one protocol endpoints. Admission never waits on storage while holding a lock. */
+/** Fixed-policy, window-one protocol endpoints. Admission never waits on storage while holding a lock. */
 public final class TransferHttpHandler implements AuthenticatedHttpServer.Handler {
     public static final String BASE = "/lcp-stream/v1/transfers";
     private final TransferSink sink;
@@ -23,17 +23,23 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
     private final PeerDirectory directory;
     private final String route, node;
     private final Limits limits;
+    private final ChunkCompression optionalCodec;
     private final ByteBudget budget;
     private final Clock clock;
     private final Duration verificationTimeout;
     private final AtomicBoolean admitted = new AtomicBoolean();
     public TransferHttpHandler(TransferSink sink, HpkeKey key, PeerDirectory directory, String route, String node,
                                Limits limits, ByteBudget budget, Clock clock, Duration verificationTimeout) {
+        this(sink, key, directory, route, node, limits, budget, clock, verificationTimeout, ChunkCompression.NONE);
+    }
+    public TransferHttpHandler(TransferSink sink, HpkeKey key, PeerDirectory directory, String route, String node,
+                               Limits limits, ByteBudget budget, Clock clock, Duration verificationTimeout, ChunkCompression optionalCodec) {
+        this.optionalCodec = Objects.requireNonNull(optionalCodec);
         this.sink = Objects.requireNonNull(sink); this.key = Objects.requireNonNull(key); this.directory = Objects.requireNonNull(directory);
         this.route = Objects.requireNonNull(route); this.node = Objects.requireNonNull(node); this.limits = Objects.requireNonNull(limits);
         this.budget = Objects.requireNonNull(budget); this.clock = Objects.requireNonNull(clock); this.verificationTimeout = verificationTimeout;
         if (limits.maxPlainBytes() > 8 * 1024 * 1024 || limits.maxInFlightChunks() != 1
-                || budget.capacity() < Math.max(peak(limits), 4L * MetadataCodec.CONTROL_LIMIT)
+                || budget.capacity() < Math.max(CompressionPlan.peak(limits, optionalCodec), 4L * MetadataCodec.CONTROL_LIMIT)
                 || verificationTimeout.isNegative() || verificationTimeout.isZero()) throw new IllegalArgumentException("Invalid fixed transfer bounds");
     }
     /** Conservative live-array reservation including framing, HPKE copies, plaintext and verification scratch. */
@@ -68,13 +74,14 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
                 if (x.getRequestURI().getRawQuery() != null) throw new TransferException(INVALID_MESSAGE);
                 if (parts.length == 3 && parts[1].equals("chunks") && "PUT".equals(method)) {
                     long index = unsigned(parts[2]);
-                    try (var lease = reserve(peak(context.accepted().limits()))) {
+                    try (var lease = reserve(CompressionPlan.peak(context.accepted().limits(), CompressionPlan.select(context.accepted().compressionCode(), optionalCodec)))) {
                         byte[] body = frameBody(x, context.accepted().limits(), context.accepted().limits().maxFrameBytes());
-                        byte[] plain = HpkeFrames.openChunk(context, key, source, target, id, index, ByteBuffer.wrap(body));
+                        byte[] compressed = HpkeFrames.openChunk(context, key, source, target, id, index, ByteBuffer.wrap(body));
                         var frame = FrameCodec.decode(ByteBuffer.wrap(body), context.accepted().limits());
                         byte[] aadBytes = new byte[frame.aad().remaining()]; frame.aad().get(aadBytes);
                         var aad = MetadataCodec.decode(aadBytes, ChunkAad.class);
-                        if (aad.compressionCode() != 0 || aad.plainLength() > context.accepted().policy().maxChunkBytes()) throw new TransferException(LIMIT_EXCEEDED);
+                        if (aad.plainLength() > context.accepted().policy().maxChunkBytes()) throw new TransferException(LIMIT_EXCEEDED);
+                        byte[] plain = CompressionPlan.select(aad.compressionCode(), optionalCodec).decompress(compressed, Math.toIntExact(aad.plainLength()));
                         var state = session.state();
                         if (state.state() != State.COMPLETED) unexpired(context);
                         boolean repeated = !session.receipts(index, 1).entries().isEmpty();
@@ -89,7 +96,7 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
                         }
                     }
                 } else if (parts.length == 2 && parts[1].equals("finish") && "POST".equals(method)) {
-                    try (var lease = reserve(peak(context.accepted().limits()))) {
+                    try (var lease = reserve(CompressionPlan.peak(context.accepted().limits(), CompressionPlan.select(context.accepted().compressionCode(), optionalCodec)))) {
                         byte[] body = frameBody(x, context.accepted().limits(), Math.min(8192, context.accepted().limits().maxFrameBytes()));
                         FinishManifest f = HpkeFrames.openFinish(context, key, source, target, id, ByteBuffer.wrap(body));
                         if (session.state().finish() == null) unexpired(context);
@@ -127,15 +134,18 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
         }
         if (!r.expiresAt().isAfter(clock.instant())) throw new TransferException(EXPIRED);
         Policy p = r.policy();
-        if (p.mode() != 0 || p.maxWindow() != 1 || !r.compressionOffers().contains(0)) throw new TransferException(INVALID_MESSAGE);
+        if (p.mode() != 0 || p.maxWindow() != 1) throw new TransferException(INVALID_MESSAGE);
+        int compressionCode = r.compressionOffers().stream().filter(c -> c == 0 || c == optionalCodec.code()).findFirst()
+                .orElseThrow(() -> new TransferException(INVALID_MESSAGE));
+        ChunkCompression codec = CompressionPlan.select(compressionCode, optionalCodec);
         Limits offered = r.limits();
         Limits acceptedLimits = new Limits(Math.min(limits.maxFrameBytes(), offered.maxFrameBytes()), Math.min(limits.maxPlainBytes(), offered.maxPlainBytes()),
                 Math.min(limits.maxChunks(), offered.maxChunks()), Math.min(limits.maxTransferBytes(), offered.maxTransferBytes()), 1);
-        if (p.maxChunkBytes() > acceptedLimits.maxPlainBytes() || p.maxChunkBytes() + 512 > acceptedLimits.maxFrameBytes()
-                || acceptedLimits.maxFrameBytes() < 2048) throw new TransferException(LIMIT_EXCEEDED);
-        Policy acceptedPolicy = new Policy(0, 1, p.minChunkBytes(), p.maxChunkBytes(), p.initialChunkBytes(), 1, 1, 1, 1, 1, 1);
+        try { CompressionPlan.validate(p, acceptedLimits, codec, budget.capacity()); }
+        catch (IllegalArgumentException e) { throw new TransferException(LIMIT_EXCEEDED); }
+        Policy acceptedPolicy = new Policy(0, 1, p.minChunkBytes(), p.maxChunkBytes(), p.initialChunkBytes(), 1, 1, 1, compressionCode == 0 ? 1 : p.minZstdLevel(), compressionCode == 0 ? 1 : p.maxZstdLevel(), compressionCode == 0 ? 1 : p.initialZstdLevel());
         byte[] challenge = new byte[32]; new SecureRandom().nextBytes(challenge);
-        Accepted a = new Accepted(r.transferId(), new Bytes32(challenge), UUID.randomUUID().toString(), 0, acceptedPolicy, acceptedLimits, r.expiresAt());
+        Accepted a = new Accepted(r.transferId(), new Bytes32(challenge), UUID.randomUUID().toString(), compressionCode, acceptedPolicy, acceptedLimits, r.expiresAt());
         if (!key.publicHash().equals(r.targetPublicKeyHash())) throw new AuthenticationException();
         BoundTransfer context = BoundTransfer.freeze(r, a, source, target, directory, clock.instant());
         try (var session = sink.open(context.stored())) { send(x, 201, MetadataJson.encode(session.state().transfer().response())); }

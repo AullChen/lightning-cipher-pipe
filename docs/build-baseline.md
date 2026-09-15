@@ -5,6 +5,7 @@
 | 依赖 | 版本 | 用途 | 许可 |
 | --- | --- | --- | --- |
 | Jackson Core | 2.22.2 | 有界 JSON 流式解析 | Apache-2.0 |
+| zstd-jni（可选） | 1.5.7-16 | 独立 ZSTD 压缩与解压 | BSD-2-Clause（含上游许可） |
 | JUnit Jupiter | 5.14.4 | 自动化测试 | EPL-2.0 |
 | Bouncy Castle bcprov | 1.85.2 | HPKE 与密钥编码 | MIT |
 | Bouncy Castle bcpkix / bcutil | 1.85 | 仅测试：生成临时证书 | MIT |

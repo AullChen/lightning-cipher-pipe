@@ -44,15 +44,15 @@ class TransferIntegrationTest extends StorageTestSupport {
     class Pair implements AutoCloseable {
         final TestClock clock = new TestClock();
         final FileSink sink;
-        final ByteBudget targetBudget = new ByteBudget(4 * 1024 * 1024), sourceBudget = new ByteBudget(4 * 1024 * 1024);
+        final ByteBudget targetBudget = new ByteBudget(64 * 1024 * 1024), sourceBudget = new ByteBudget(64 * 1024 * 1024);
         final AuthenticatedHttpClient http = new AuthenticatedHttpClient(sourceTls, Duration.ofSeconds(3), TIMEOUT, 2, 16);
-        final FixedTransferClient sender = new FixedTransferClient(http, sourceKey, directory, sourceBudget, clock);
+        final FixedTransferClient sender = new FixedTransferClient(http, sourceKey, directory, sourceBudget, clock, new io.github.aullchen.lcp.compression.ZstdCompression());
         final AuthenticatedHttpServer server;
         final URI endpoint;
         Pair() throws Exception { this(new FileSink.Io() {}); }
         Pair(FileSink.Io io) throws Exception {
             sink = new FileSink(root, 128 * 52, io);
-            var handler = new TransferHttpHandler(sink, targetKey, directory, "demo", "target", LIMITS, targetBudget, clock, TIMEOUT);
+            var handler = new TransferHttpHandler(sink, targetKey, directory, "demo", "target", LIMITS, targetBudget, clock, TIMEOUT, new io.github.aullchen.lcp.compression.ZstdCompression());
             server = new AuthenticatedHttpServer(new InetSocketAddress("127.0.0.1", 0), targetTls, "target", "demo", directory, 2, 8, handler);
             endpoint = URI.create("https://localhost:" + server.port() + TransferHttpHandler.BASE);
         }
@@ -260,4 +260,22 @@ class TransferIntegrationTest extends StorageTestSupport {
             assertEquals(0, pair.status(o.context.request().transferId()).committedChunks());
             assertEquals(0, pair.targetBudget.used());
         }
-    }}
+    }    @ParameterizedTest @ValueSource(strings = {"NONE-repeat", "NONE-random", "ZSTD-repeat", "ZSTD-random", "ZSTD-empty"})
+    void codecsShareAuthenticatedEndToEndFlow(String mode) throws Exception {
+        try (var pair = new Pair()) {
+            var r = pair.request(); int code = mode.startsWith("ZSTD") ? 1 : 0;
+            var p = r.policy();
+            var policy = new Policy(0,1,p.minChunkBytes(),p.maxChunkBytes(),p.initialChunkBytes(),1,1,1,code == 1 ? 3 : 1,code == 1 ? 3 : 1,code == 1 ? 3 : 1);
+            r = new OpenRequest(r.transferId(),r.routeId(),r.sourceNodeId(),r.targetNodeId(),r.sourceChallenge(),r.sourceKeyId(),r.sourcePublicKeyHash(),r.targetKeyId(),r.targetPublicKeyHash(),List.of(code),policy,r.limits(),r.createdAt(),r.expiresAt());
+            byte[] input = new byte[mode.endsWith("empty") ? 0 : 524289]; if (mode.endsWith("random")) new Random(42).nextBytes(input);
+            Path file = Files.createTempFile("lcp-codec-input", ".bin");
+            try {
+                Files.write(file, input);
+                var result = pair.sender.transfer(pair.endpoint, r, new FileSource(file));
+                assertEquals(input.length, result.totalPlainBytes());
+                assertArrayEquals(input, Files.readAllBytes(root.resolve(r.transferId() + "/payload.bin")));
+                assertEquals(0, pair.sourceBudget.used()); assertEquals(0, pair.targetBudget.used());
+            } finally { Files.deleteIfExists(file); }
+        }
+    }
+}
