@@ -23,6 +23,7 @@ public final class FileSink implements TransferSink {
     interface Io {
         default int write(FileChannel channel, ByteBuffer bytes, long offset) throws IOException { return channel.write(bytes, offset); }
         default void after(Boundary boundary) throws IOException {}
+        default void force(FileChannel channel) throws IOException { channel.force(true); }
     }
     private final Path root;
     private final long metadataBudget;
@@ -172,6 +173,8 @@ public final class FileSink implements TransferSink {
             catch (IOException e) { payload.close(); throw e; }
             try { replay(); }
             catch (IOException | RuntimeException e) {
+                // The tentative replay index must not escape without a successful durability barrier.
+                Arrays.fill(index.array(), (byte) 0); count = 0; total = 0;
                 try { failure(State.RECOVERY_REQUIRED, UNKNOWN_COMMIT); }
                 catch (IOException persist) { e.addSuppressed(persist); log.close(); payload.close(); throw new IOException("Cannot freeze corrupt storage", e); }
                 frozen = true;
@@ -190,9 +193,13 @@ public final class FileSink implements TransferSink {
                 if (receipt(i) != null || payload.size() < offset + length) throw new IOException("Inconsistent receipt");
                 insert(r);
             }
-            if (size != complete) { log.truncate(complete); log.force(true); }
+            if (size != complete) log.truncate(complete);
             if (saved.state() == State.COMPLETED && (saved.result().totalChunks() != count || saved.result().totalPlainBytes() != total
                     || payload.size() != total)) throw new IOException("Completed output length mismatch");
+            // A full CRC-valid record may have been written just before the old process exited,
+            // without its force completing. Do not turn mere readability into a durable ACK.
+            io.force(payload);
+            io.force(log);
         }
         private void check() throws IOException { if (ended) throw new IOException("Session is closed"); safe(dir, true); }
         private void writable() throws IOException {
@@ -268,7 +275,9 @@ public final class FileSink implements TransferSink {
             }
         }
         @Override public synchronized ReceiptPage receipts(long from, int limit) throws IOException {
-            check(); if (from < 0 || from > limits.maxChunks() || limit < 1 || limit > 256) throw new TransferException(INVALID_MESSAGE);
+            check();
+            if (frozen) throw new TransferException(UNKNOWN_COMMIT);
+            if (from < 0 || from > limits.maxChunks() || limit < 1 || limit > 256) throw new TransferException(INVALID_MESSAGE);
             long end = Math.min(limits.maxChunks(), from + limit); List<Receipt> entries = new ArrayList<>();
             for (long i = from; i < end; i++) { Receipt r = receipt(i); if (r != null) entries.add(r); }
             return new ReceiptPage(transfer.request().transferId(), from, limit, entries, end < limits.maxChunks() ? end : null, state().revision());

@@ -114,6 +114,23 @@ class FileSinkTest extends StorageTestSupport {
         return new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", System.getProperty("os.name").startsWith("Windows") ? "java.exe" : "java").toString(), "-cp",
                 System.getProperty("java.class.path"), LockProbe.class.getName(), root.toString()).redirectErrorStream(true).start();
     }
+    @Test void recoveryRejectsDirectoryEscapeWithoutTouchingDestination() throws Exception {
+        Path sinkRoot = Files.createDirectory(root.resolve("sink"));
+        Path destination = Files.createDirectory(root.resolve("unrelated"));
+        Path keep = destination.resolve("keep.txt"); Files.writeString(keep,"untouched");
+        Path link = sinkRoot.resolve(UUID.randomUUID().toString());
+        if (System.getProperty("os.name").startsWith("Windows")) {
+            // Both paths belong to this test; a junction exercises Windows reparse handling.
+            Process command = new ProcessBuilder("cmd.exe","/c","mklink","/J",link.toAbsolutePath().toString(),destination.toAbsolutePath().toString())
+                    .redirectErrorStream(true).start();
+            try { assertTrue(command.waitFor(5,TimeUnit.SECONDS)); assertEquals(0,command.exitValue()); }
+            finally { if (command.isAlive()) { command.destroyForcibly(); command.waitFor(5,TimeUnit.SECONDS); } }
+        } else Files.createSymbolicLink(link,destination.toAbsolutePath());
+        try {
+            assertThrows(java.io.IOException.class,() -> new FileSink(sinkRoot,4096));
+            assertEquals("untouched",Files.readString(keep));
+        } finally { Files.deleteIfExists(link); }
+    }
     public static class LockProbe {
         public static void main(String[] args) throws Exception {
             try (var sink = new FileSink(Path.of(args[0]), 4096)) { }
