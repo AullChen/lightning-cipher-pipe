@@ -23,7 +23,8 @@ public final class AuthenticatedHttpClient implements AutoCloseable {
         client = HttpClient.newBuilder().sslContext(context).sslParameters(ssl).executor(executor)
                 .connectTimeout(connectTimeout).version(HttpClient.Version.HTTP_1_1).followRedirects(HttpClient.Redirect.NEVER).build();
     }
-    public record Response(int status, byte[] body, TlsIdentity source, TlsIdentity target) {
+    public record Response(int status, byte[] body, TlsIdentity source, TlsIdentity target, long retryAfterMillis) {
+        public Response(int status, byte[] body, TlsIdentity source, TlsIdentity target) { this(status,body,source,target,0); }
         public Response { body = body.clone(); }
         @Override public byte[] body() { return body.clone(); }
     }
@@ -35,10 +36,10 @@ public final class AuthenticatedHttpClient implements AutoCloseable {
         if (!List.of("GET", "POST", "PUT").contains(method) || body.length > 16 * 1024 * 1024) throw new IllegalArgumentException("Invalid request");
         if (!"https".equalsIgnoreCase(uri.getScheme()) || maxBodyBytes < 0 || maxBodyBytes > 65536) throw new IllegalArgumentException("Invalid HTTPS request bound");
         if (!permits.tryAcquire()) throw new IOException("Client busy");
-        try {
+        try (var ownedBody = new RequestBody(body)) {
             var builder = HttpRequest.newBuilder(uri).timeout(timeout);
             if (contentType != null) builder.header("Content-Type", contentType);
-            var request = builder.method(method, body.length == 0 ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(body)).build();
+            var request = builder.method(method, body.length == 0 ? HttpRequest.BodyPublishers.noBody() : ownedBody).build();
             var future = client.sendAsync(request, ignored -> new LimitedBody(maxBodyBytes));
             HttpResponse<byte[]> response;
             try { response = future.get(timeout.toNanos(), TimeUnit.NANOSECONDS); }
@@ -50,8 +51,13 @@ public final class AuthenticatedHttpClient implements AutoCloseable {
             var source = TlsIdentity.local(session, TlsIdentity.Role.CLIENT);
             if (!target.nodeId().equals(expectedNode)) throw new AuthenticationException();
             directory.authorizeRoute(target.nodeId(), route);
-            return new Response(response.statusCode(), response.body(), source, target);
+            return new Response(response.statusCode(), response.body(), source, target, retryAfter(response));
         } finally { permits.release(); }
+    }
+    private static long retryAfter(HttpResponse<?> response) {
+        String value = response.headers().firstValue("Retry-After").orElse("0");
+        if (!value.matches("[0-9]{1,10}")) return 0;
+        return Math.min(10, Long.parseLong(value)) * 1000;
     }
     private static final class LimitedBody implements HttpResponse.BodySubscriber<byte[]> {
         private final HttpResponse.BodySubscriber<byte[]> delegate = HttpResponse.BodySubscribers.ofByteArray();

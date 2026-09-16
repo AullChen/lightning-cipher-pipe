@@ -171,6 +171,9 @@ public final class TransferJson {
                 || r.totalChunks() != u(m.get("committedChunks")) || r.totalPlainBytes() != u(m.get("committedPlainBytes")))) throw ProtocolException.invalid();
         return new Status(uuid(m.get("transferId")), state, u(m.get("revision")), u(m.get("committedChunks")), u(m.get("committedPlainBytes")), Instant.ofEpochMilli(u(m.get("expiresAt"))), f, r, error);
     }
+    public static byte[] cancel(CancelCommand command) {
+        return encode(object("transferId",command.transferId(),"commandId",command.commandId(),"bindingHash",command.bindingHash()));
+    }
     public static CancelCommand cancel(byte[] bytes) {
         var m = fields(parse(bytes), "transferId", "commandId", "bindingHash");
         return new CancelCommand(uuid(m.get("transferId")), uuid(m.get("commandId")), hash(m.get("bindingHash")));

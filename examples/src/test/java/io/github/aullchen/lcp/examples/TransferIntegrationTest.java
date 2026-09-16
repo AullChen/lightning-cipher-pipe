@@ -51,10 +51,11 @@ class TransferIntegrationTest extends StorageTestSupport {
         final URI endpoint;
         Pair() throws Exception { this(new FileSink.Io() {}); }
         Pair(FileSink.Io io) throws Exception { this(io, LIMITS); }
-        Pair(FileSink.Io io, Limits bounds) throws Exception {
-            sink = new FileSink(root, 128 * 52, io);
+        Pair(FileSink.Io io, Limits bounds) throws Exception { this(io,bounds,h -> h); }
+        Pair(FileSink.Io io, Limits bounds, java.util.function.UnaryOperator<AuthenticatedHttpServer.Handler> decorate) throws Exception {
+            sink = new FileSink(root, bounds.maxChunks() * 52, io);
             var handler = new TransferHttpHandler(sink, targetKey, directory, "demo", "target", bounds, targetBudget, clock, TIMEOUT, new io.github.aullchen.lcp.compression.ZstdCompression());
-            server = new AuthenticatedHttpServer(new InetSocketAddress("127.0.0.1", 0), targetTls, "target", "demo", directory, 5, 16, handler);
+            server = new AuthenticatedHttpServer(new InetSocketAddress("127.0.0.1", 0), targetTls, "target", "demo", directory, 5, 16, decorate.apply(handler));
             endpoint = URI.create("https://localhost:" + server.port() + TransferHttpHandler.BASE);
         }
         OpenRequest request() {
@@ -124,6 +125,176 @@ class TransferIntegrationTest extends StorageTestSupport {
             for (byte b : output) assertEquals((byte) random.nextInt(256), b);
             assertEquals(0, pair.sourceBudget.used()); assertEquals(0, pair.targetBudget.used());
         }
+    }
+    @Test void lostDurableAckIsReconciledAcrossEveryAssignedPage() throws Exception {
+        var bounds = new Limits(300000,262144,300,1000,1);
+        var dropped = new java.util.concurrent.atomic.AtomicBoolean();
+        var pages = new java.util.concurrent.CopyOnWriteArrayList<Long>();
+        try (var pair = new Pair(new FileSink.Io(){},bounds,handler -> (x,source,target) ->
+                handler.handle(new FaultExchange(x,(path,code,body) -> {
+                    if (path.endsWith("/chunks/269") && code == 200 && !dropped.getAndSet(true)) return null;
+                    if (path.endsWith("/receipts") && code == 200) pages.add(TransferJson.page(body).from());
+                    return body;
+                }),source,target))) {
+            var request = requestWith(pair, bounds, 1, 1);
+            var result = pair.sender.transfer(pair.endpoint,request,new GeneratorSource(270,42));
+            assertEquals(270,result.totalChunks()); assertTrue(dropped.get());
+            assertEquals(List.of(0L,256L),pages);
+            assertEquals(270 * 68,Files.size(root.resolve(request.transferId()+"/receipts.log")));
+            assertEquals(0,pair.sourceBudget.used());
+        }
+    }
+    @Test void missingPreviouslyAcknowledgedReceiptFreezesWithoutReadingNextChunk() throws Exception {
+        var dropped = new java.util.concurrent.atomic.AtomicBoolean();
+        var reads = new java.util.concurrent.atomic.AtomicInteger();
+        try (var pair = new Pair(new FileSink.Io(){},LIMITS,handler -> (x,source,target) ->
+                handler.handle(new FaultExchange(x,(path,code,body) -> {
+                    if (path.endsWith("/chunks/1") && code == 200 && !dropped.getAndSet(true)) return null;
+                    if (path.endsWith("/receipts") && code == 200) {
+                        var page = TransferJson.page(body);
+                        return TransferJson.page(new ReceiptPage(page.transferId(),page.from(),page.limit(),
+                                page.entries().stream().filter(r -> r.chunkIndex()!=0).toList(),page.nextFrom(),page.revision()));
+                    }
+                    return body;
+                }),source,target))) {
+            var request = requestWith(pair,LIMITS,1,1);
+            TransferSource input = new TransferSource() {
+                public int read(ByteBuffer dst) { reads.incrementAndGet(); dst.put((byte)1); return 1; }
+                public void close() {}
+            };
+            assertEquals(ErrorCode.UNKNOWN_COMMIT,assertThrows(TransferException.class,() -> pair.sender.transfer(pair.endpoint,request,input)).code());
+            assertEquals(2,reads.get()); assertEquals(0,pair.sourceBudget.used());
+            assertEquals(2,pair.status(request.transferId()).committedChunks());
+        }
+    }
+    @Test void fullBudgetRetriesFreshFramesBeforeNewSourceReads() throws Exception {
+        var bounds = new Limits(300000,262144,128,16*1024*1024,3);
+        var attempts = new java.util.concurrent.atomic.AtomicIntegerArray(3);
+        var firstFrames = new java.util.concurrent.ConcurrentHashMap<Integer,byte[]>();
+        var reads = new java.util.concurrent.atomic.AtomicInteger();
+        try (var pair = new Pair(new FileSink.Io(){},bounds,handler -> (x,source,target) -> {
+            String path = x.getRequestURI().getPath();
+            if (path.contains("/chunks/")) {
+                int index = Integer.parseInt(path.substring(path.lastIndexOf('/')+1));
+                if (index < 3) {
+                    byte[] frame = x.getRequestBody().readAllBytes();
+                    if (attempts.incrementAndGet(index) == 1) {
+                        firstFrames.put(index,frame); byte[] error = TransferJson.error(ErrorCode.BUSY);
+                        x.getResponseHeaders().set("Retry-After","0"); x.sendResponseHeaders(429,error.length); x.getResponseBody().write(error); return;
+                    }
+                    assertEquals(3,reads.get()); assertFalse(Arrays.equals(firstFrames.get(index),frame));
+                    x.setStreams(new ByteArrayInputStream(frame),x.getResponseBody());
+                }
+            }
+            handler.handle(x,source,target);
+        })) {
+            var request = requestWith(pair,bounds,262144,3);
+            var budget = new ByteBudget(3*CompressionPlan.peak(bounds,ChunkCompression.NONE));
+            var generated = new GeneratorSource(3*262144+1,42);
+            TransferSource input = new TransferSource() {
+                public int read(ByteBuffer dst) throws IOException { reads.incrementAndGet(); return generated.read(dst); }
+                public void close() { generated.close(); }
+            };
+            try (var sender = new FixedTransferClient(pair.http,sourceKey,directory,budget,pair.clock)) {
+                var result = sender.transfer(pair.endpoint,request,input); assertEquals(4,result.totalChunks());
+            }
+            for (int i=0;i<3;i++) assertEquals(2,attempts.get(i));
+            assertEquals(0,budget.used()); assertEquals(4*68,Files.size(root.resolve(request.transferId()+"/receipts.log")));
+        }
+    }
+    @Test void busyCountsTowardFourSendLimitAndCancelsWithoutNewReads() throws Exception {
+        var attempts = new java.util.concurrent.atomic.AtomicInteger(); var reads = new java.util.concurrent.atomic.AtomicInteger();
+        try (var pair = new Pair(new FileSink.Io(){},LIMITS,handler -> (x,source,target) -> {
+            if (x.getRequestURI().getPath().contains("/chunks/")) {
+                x.getRequestBody().readAllBytes(); attempts.incrementAndGet(); byte[] error = TransferJson.error(ErrorCode.BUSY);
+                x.sendResponseHeaders(429,error.length); x.getResponseBody().write(error); return;
+            }
+            handler.handle(x,source,target);
+        })) {
+            var request = requestWith(pair,LIMITS,1,1);
+            TransferSource input = new TransferSource() {
+                public int read(ByteBuffer dst) { reads.incrementAndGet(); dst.put((byte)1); return 1; }
+                public void close() {}
+            };
+            assertEquals(ErrorCode.UNKNOWN_COMMIT,assertThrows(TransferException.class,() -> pair.sender.transfer(pair.endpoint,request,input)).code());
+            assertEquals(4,attempts.get()); assertEquals(1,reads.get());
+            assertEquals(State.CANCELLED,pair.status(request.transferId()).state()); assertEquals(0,pair.sourceBudget.used());
+        }
+    }
+    @Test void lostFinishResponseReturnsOnlyVerifiedCompletedStatus() throws Exception {
+        var dropped = new java.util.concurrent.atomic.AtomicBoolean();
+        try (var pair = new Pair(new FileSink.Io(){},LIMITS,handler -> (x,source,target) ->
+                handler.handle(new FaultExchange(x,(path,code,body) -> {
+                    if (path.endsWith("/finish") && code == 200 && !dropped.getAndSet(true)) return null;
+                    return body;
+                }),source,target))) {
+            var request = pair.request();
+            var result = pair.sender.transfer(pair.endpoint,request,new GeneratorSource(1,42));
+            assertTrue(dropped.get()); assertEquals(1,result.totalPlainBytes()); assertEquals(0,pair.sourceBudget.used());
+        }
+    }
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value=ErrorCode.class,names={"AUTH_FAILED","CHUNK_CONFLICT","UNKNOWN_COMMIT"})
+    void definitiveFailuresAreNeverRetried(ErrorCode code) throws Exception {
+        var attempts = new java.util.concurrent.atomic.AtomicInteger();
+        var queries = new java.util.concurrent.atomic.AtomicInteger();
+        try (var pair = new Pair(new FileSink.Io(){},LIMITS,handler -> (x,source,target) -> {
+            if (x.getRequestMethod().equals("GET")) queries.incrementAndGet();
+            if (x.getRequestURI().getPath().contains("/chunks/")) {
+                x.getRequestBody().readAllBytes(); attempts.incrementAndGet(); byte[] error = TransferJson.error(code);
+                x.sendResponseHeaders(TransferJson.httpStatus(code),error.length); x.getResponseBody().write(error); return;
+            }
+            handler.handle(x,source,target);
+        })) {
+            assertEquals(code,assertThrows(TransferException.class,() -> pair.sender.transfer(pair.endpoint,pair.request(),new GeneratorSource(1,42))).code());
+            assertEquals(1,attempts.get()); assertEquals(0,queries.get()); assertEquals(0,pair.sourceBudget.used());
+        }
+    }
+    @Test void timeoutReconcilesAbsentChunkBeforeRetryAndKeepsLease() throws Exception {
+        var timedOut = new CountDownLatch(1); var attempts = new java.util.concurrent.atomic.AtomicInteger();
+        var budget = new ByteBudget(CompressionPlan.peak(LIMITS,ChunkCompression.NONE));
+        try (var pair = new Pair(new FileSink.Io(){},LIMITS,handler -> (x,source,target) -> {
+            if (x.getRequestURI().getPath().contains("/chunks/") && attempts.incrementAndGet()==1) {
+                x.getRequestBody().readAllBytes();
+                try { assertTrue(timedOut.await(5,TimeUnit.SECONDS)); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IOException(e); }
+                x.close(); return;
+            }
+            if (x.getRequestMethod().equals("GET")) { assertEquals(budget.capacity(),budget.used()); timedOut.countDown(); }
+            handler.handle(x,source,target);
+        }); var http = new AuthenticatedHttpClient(sourceTls,Duration.ofSeconds(2),Duration.ofSeconds(2),3,16);
+             var sender = new FixedTransferClient(http,sourceKey,directory,budget,pair.clock)) {
+            var result = sender.transfer(pair.endpoint,pair.request(),new GeneratorSource(1,42));
+            assertEquals(1,result.totalChunks()); assertEquals(2,attempts.get()); assertEquals(0,budget.used());
+        } finally { timedOut.countDown(); }
+    }
+    @Test void preparationFailureClosesSourceAndItsUnsubmittedLease() throws Exception {
+        try (var pair = new Pair()) {
+            var closed = new java.util.concurrent.atomic.AtomicInteger();
+            var badCodec = new ChunkCompression() {
+                public int code() { return 1; }
+                public long compressBound(long size) { return size+1024; }
+                public long workspaceBytes() { return 0; }
+                public byte[] compress(byte[] plain,int level) throws IOException { throw new IOException("Injected preparation failure"); }
+                public byte[] decompress(byte[] bytes,int length) { throw new AssertionError(); }
+            };
+            var old = pair.request();
+            var request = new OpenRequest(old.transferId(),old.routeId(),old.sourceNodeId(),old.targetNodeId(),old.sourceChallenge(),
+                    old.sourceKeyId(),old.sourcePublicKeyHash(),old.targetKeyId(),old.targetPublicKeyHash(),List.of(1),old.policy(),old.limits(),old.createdAt(),old.expiresAt());
+            TransferSource input = new TransferSource() {
+                public int read(ByteBuffer dst) { dst.put(new byte[dst.remaining()]); return dst.position(); }
+                public void close() { closed.incrementAndGet(); }
+            };
+            try (var sender = new FixedTransferClient(pair.http,sourceKey,directory,pair.sourceBudget,pair.clock,badCodec)) {
+                assertThrows(IOException.class,() -> sender.transfer(pair.endpoint,request,input));
+            }
+            assertEquals(1,closed.get()); assertEquals(0,pair.sourceBudget.used());
+        }
+    }
+    private static OpenRequest requestWith(Pair pair, Limits bounds, int chunk, int window) {
+        var old = pair.request(); var policy = new Policy(0,1,chunk,chunk,chunk,window,window,window,1,1,1);
+        return new OpenRequest(old.transferId(),old.routeId(),old.sourceNodeId(),old.targetNodeId(),old.sourceChallenge(),
+                old.sourceKeyId(),old.sourcePublicKeyHash(),old.targetKeyId(),old.targetPublicKeyHash(),List.of(0),policy,bounds,old.createdAt(),old.expiresAt());
     }
     @Test void durableOpenReplayConflictBusyAndExpiry() throws Exception {
         try (var pair = new Pair()) {

@@ -94,7 +94,7 @@ public final class TransferNode {
                     MetadataCodec.hash(small(Path.of(required(p,"peerHpkePublicKey")))),List.of(code),policy,limits,now,now.plusSeconds(86400));
             URI endpoint = URI.create(required(p,"peerUrl") + TransferHttpHandler.BASE);
             try (var http = new AuthenticatedHttpClient(tls,Duration.ofSeconds(10),Duration.ofMinutes(11),Math.toIntExact(limits.maxInFlightChunks())+1,32);
-                 var sender = new FixedTransferClient(http,key,directory,budget,Clock.systemUTC(),codec)) {
+                 var sender = new FixedTransferClient(http,key,directory,budget,Clock.systemUTC(),codec,metadata)) {
                 TransferSource source = p.containsKey("inputFile") ? new FileSource(Path.of(required(p,"inputFile")))
                         : new GeneratorSource(number(p,"generatorBytes",0),number(p,"generatorSeed",42));
                 System.out.println("transferId=" + id + " configuredWindow=" + limits.maxInFlightChunks());
