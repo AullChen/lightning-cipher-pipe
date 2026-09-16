@@ -160,7 +160,9 @@ public final class FileSink implements TransferSink {
         private SessionState saved;
         private int count;
         private long total;
-        private boolean ended, frozen;
+        private boolean ended, frozen, closing;
+        private final List<Receipt> reservations = new ArrayList<>(16);
+        private final Object journal = new Object();
         Session(Path dir, AcceptedTransfer transfer) throws IOException {
             this.dir = dir; this.transfer = transfer; limits = transfer.response().accepted().limits();
             int slots = Math.toIntExact(limits.maxChunks());
@@ -201,7 +203,7 @@ public final class FileSink implements TransferSink {
             io.force(payload);
             io.force(log);
         }
-        private void check() throws IOException { if (ended) throw new IOException("Session is closed"); safe(dir, true); }
+        private void check() throws IOException { if (ended || closing) throw new IOException("Session is closed"); safe(dir, true); }
         private void writable() throws IOException {
             check();
             if (frozen || !active(saved.state()) || saved.state() == State.VERIFYING) throw new TransferException(STATE_CONFLICT);
@@ -247,31 +249,51 @@ public final class FileSink implements TransferSink {
         private void writeAll(FileChannel channel, ByteBuffer bytes, long offset) throws IOException {
             while (bytes.hasRemaining()) { int n = io.write(channel, bytes, offset); if (n <= 0) throw new IOException("No storage progress"); offset += n; }
         }
-        @Override public synchronized Receipt commit(Chunk chunk) throws IOException {
-            check();
+        @Override public Receipt commit(Chunk chunk) throws IOException {
             Receipt r = new Receipt(transfer.request().transferId(), chunk.index(), chunk.offset(), chunk.plainLength(), chunk.payloadHash());
-            Receipt old = receipt(chunk.index());
-            if (old != null && old.equals(r) && (active(saved.state()) || saved.state() == State.COMPLETED) && !frozen) return old;
-            if (old != null && saved.state() == State.COMPLETED) throw new TransferException(CHUNK_CONFLICT);
-            writable();
-            if (old != null) throw new TransferException(CHUNK_CONFLICT);
-            validateRange(r);
-            // The Sink also checks the descriptor against bytes before any side effect.
             var digest = sha256(); digest.update(chunk.bytes());
             if (!new Bytes32(digest.digest()).equals(r.payloadHash())) throw new TransferException(INTEGRITY_MISMATCH);
-            recordTransferring();
+            synchronized (this) {
+                check();
+                Receipt old = receipt(chunk.index());
+                if (old != null && old.equals(r) && (active(saved.state()) || saved.state() == State.COMPLETED) && !frozen) return old;
+                if (old != null && saved.state() == State.COMPLETED) throw new TransferException(CHUNK_CONFLICT);
+                writable();
+                if (old != null) throw new TransferException(CHUNK_CONFLICT);
+                validateRange(r);
+                for (Receipt reserved : reservations) {
+                    if (reserved.equals(r)) throw new TransferException(BUSY);
+                    if (reserved.chunkIndex() == r.chunkIndex() || reserved.offset() < r.offset() + r.plainLength()
+                            && r.offset() < reserved.offset() + reserved.plainLength()) throw new TransferException(CHUNK_CONFLICT);
+                }
+                if (reservations.size() >= limits.maxInFlightChunks()) throw new TransferException(BUSY);
+                recordTransferring(); reservations.add(r);
+            }
             try {
+                // Disjoint positional writes run outside the admission monitor.
                 writeAll(payload, chunk.bytes(), chunk.offset()); io.after(Boundary.PAYLOAD_WRITTEN);
                 payload.force(true); io.after(Boundary.PAYLOAD_FORCED);
-                ByteBuffer b = ByteBuffer.allocate(RECORD).putInt(0x4c435052).putInt(1).putLong(r.chunkIndex()).putLong(r.offset()).putLong(r.plainLength()).put(r.payloadHash().bytes());
-                CRC32C crc = new CRC32C(); crc.update(b.array(), 0, 64); b.putInt((int) crc.getValue()).flip();
-                writeAll(log, b, log.size()); io.after(Boundary.RECEIPT_WRITTEN);
-                log.force(true); io.after(Boundary.RECEIPT_FORCED);
-                insert(r); io.after(Boundary.INDEX_PUBLISHED); return r;
-            } catch (IOException e) {
-                frozen = true;
-                try { failure(State.RECOVERY_REQUIRED, UNKNOWN_COMMIT); } catch (IOException persist) { e.addSuppressed(persist); }
+                synchronized (journal) {
+                    synchronized (this) { if (frozen || !active(saved.state())) throw new TransferException(STATE_CONFLICT); }
+                    ByteBuffer b = ByteBuffer.allocate(RECORD).putInt(0x4c435052).putInt(1).putLong(r.chunkIndex()).putLong(r.offset()).putLong(r.plainLength()).put(r.payloadHash().bytes());
+                    CRC32C crc = new CRC32C(); crc.update(b.array(), 0, 64); b.putInt((int) crc.getValue()).flip();
+                    writeAll(log, b, log.size()); io.after(Boundary.RECEIPT_WRITTEN);
+                    log.force(true); io.after(Boundary.RECEIPT_FORCED);
+                    synchronized (this) {
+                        insert(r);
+                        if (frozen || !active(saved.state())) throw new TransferException(STATE_CONFLICT);
+                    }
+                    io.after(Boundary.INDEX_PUBLISHED); return r;
+                }
+            } catch (TransferException e) { throw e; }
+            catch (IOException e) {
+                synchronized (this) {
+                    frozen = true;
+                    try { failure(State.RECOVERY_REQUIRED, UNKNOWN_COMMIT); } catch (IOException persist) { e.addSuppressed(persist); }
+                }
                 throw new TransferException(UNKNOWN_COMMIT);
+            } finally {
+                synchronized (this) { reservations.remove(r); notifyAll(); }
             }
         }
         @Override public synchronized ReceiptPage receipts(long from, int limit) throws IOException {
@@ -286,7 +308,7 @@ public final class FileSink implements TransferSink {
             check(); if (offset < 0) throw new IllegalArgumentException("Negative offset"); return payload.read(dst, offset);
         }
         @Override public synchronized void recordVerifying(FinishManifest f) throws IOException {
-            check();
+            check(); if (!reservations.isEmpty()) throw new TransferException(BUSY);
             if (saved.cancel() != null && saved.cancel().commandId().equals(f.commandId())) throw new TransferException(COMMAND_CONFLICT);
             if (saved.finish() != null) { if (!saved.finish().equals(f)) throw new TransferException(COMMAND_CONFLICT); if (saved.state() == State.VERIFYING || saved.state() == State.COMPLETED) return; }
             writable();
@@ -315,11 +337,18 @@ public final class FileSink implements TransferSink {
             if (!command.transferId().equals(transfer.request().transferId()) || !command.bindingHash().equals(transfer.response().bindingHash())) throw new TransferException(INVALID_MESSAGE);
             if (saved.cancel() != null) { if (!saved.cancel().equals(command)) throw new TransferException(COMMAND_CONFLICT); return state(); }
             if (saved.finish() != null && saved.finish().commandId().equals(command.commandId())) throw new TransferException(COMMAND_CONFLICT);
+            if (!reservations.isEmpty()) throw new TransferException(BUSY);
             writable(); save(State.CANCELLED, null, null, null, command); return state();
         }
         @Override public void close() throws IOException {
             synchronized (FileSink.this) { synchronized (this) {
-                if (ended) return; ended = true;
+                if (ended) return; closing = true;
+                boolean interrupted = false;
+                while (!reservations.isEmpty()) {
+                    try { wait(); } catch (InterruptedException e) { interrupted = true; }
+                }
+                if (interrupted) Thread.currentThread().interrupt();
+                ended = true;
                 try { log.close(); } finally { payload.close(); if (current == this) current = null; }
             } }
         }

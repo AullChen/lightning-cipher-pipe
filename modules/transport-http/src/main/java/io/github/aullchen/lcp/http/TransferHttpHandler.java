@@ -12,10 +12,11 @@ import java.nio.ByteBuffer;
 import java.security.SecureRandom;
 import java.time.*;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import static io.github.aullchen.lcp.api.TransferStorage.ErrorCode.*;
 
-/** Fixed-policy, window-one protocol endpoints. Admission never waits on storage while holding a lock. */
+/** Fixed-policy endpoints with bounded concurrent request admission and pinned sessions. */
 public final class TransferHttpHandler implements AuthenticatedHttpServer.Handler {
     public static final String BASE = "/lcp-stream/v1/transfers";
     private final TransferSink sink;
@@ -27,7 +28,9 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
     private final ByteBudget budget;
     private final Clock clock;
     private final Duration verificationTimeout;
-    private final AtomicBoolean admitted = new AtomicBoolean();
+    private final ReentrantReadWriteLock lifecycle = new ReentrantReadWriteLock();
+    private final Semaphore slots;
+    private volatile SinkSession pinned;
     public TransferHttpHandler(TransferSink sink, HpkeKey key, PeerDirectory directory, String route, String node,
                                Limits limits, ByteBudget budget, Clock clock, Duration verificationTimeout) {
         this(sink, key, directory, route, node, limits, budget, clock, verificationTimeout, ChunkCompression.NONE);
@@ -38,14 +41,18 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
         this.sink = Objects.requireNonNull(sink); this.key = Objects.requireNonNull(key); this.directory = Objects.requireNonNull(directory);
         this.route = Objects.requireNonNull(route); this.node = Objects.requireNonNull(node); this.limits = Objects.requireNonNull(limits);
         this.budget = Objects.requireNonNull(budget); this.clock = Objects.requireNonNull(clock); this.verificationTimeout = verificationTimeout;
-        if (limits.maxPlainBytes() > 8 * 1024 * 1024 || limits.maxInFlightChunks() != 1
+        slots = new Semaphore(Math.toIntExact(limits.maxInFlightChunks()));
+        if (limits.maxPlainBytes() > 8 * 1024 * 1024 || limits.maxInFlightChunks() > 16
                 || budget.capacity() < Math.max(CompressionPlan.peak(limits, optionalCodec), 4L * MetadataCodec.CONTROL_LIMIT)
                 || verificationTimeout.isNegative() || verificationTimeout.isZero()) throw new IllegalArgumentException("Invalid fixed transfer bounds");
     }
     /** Conservative live-array reservation including framing, HPKE copies, plaintext and verification scratch. */
     public static long peak(Limits limits) { return 8 * limits.maxFrameBytes() + 2 * limits.maxPlainBytes() + 65536; }
     @Override public void handle(HttpsExchange x, TlsIdentity source, TlsIdentity target) throws IOException {
-        if (!admitted.compareAndSet(false, true)) { error(x, BUSY); return; }
+        boolean opening = BASE.equals(x.getRequestURI().getRawPath()) && "POST".equals(x.getRequestMethod());
+        var lock = opening ? lifecycle.writeLock() : lifecycle.readLock();
+        if (!lock.tryLock()) { error(x, BUSY); return; }
+        if (!slots.tryAcquire()) { lock.unlock(); error(x, BUSY); return; }
         try {
             if (!node.equals(target.nodeId())) throw new AuthenticationException();
             String path = x.getRequestURI().getRawPath(), method = x.getRequestMethod();
@@ -57,7 +64,8 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
             if (!path.startsWith(BASE + "/")) throw new TransferException(NOT_FOUND);
             String[] parts = path.substring(BASE.length() + 1).split("/", -1);
             UUID id = uuid(parts[0]);
-            try (SinkSession session = sink.recover(id)) {
+            {
+                SinkSession session = sink.recover(id); pinned = session;
                 BoundTransfer context = BoundTransfer.restore(session.state().transfer(), directory);
                 if ("GET".equals(method)) {
                     context.checkReader(source); emptyBody(x);
@@ -116,7 +124,14 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
         catch (ProtocolException e) { error(x, e.code() == ProtocolException.Code.LIMIT_EXCEEDED ? LIMIT_EXCEEDED : INVALID_MESSAGE); }
         catch (IllegalArgumentException e) { error(x, INVALID_MESSAGE); }
         catch (IOException e) { error(x, UNKNOWN_COMMIT); }
-        finally { admitted.set(false); }
+        finally {
+            slots.release(); lock.unlock();
+            // Only the last reader may close the shared session; never close another request's channels.
+            if (lifecycle.writeLock().tryLock()) {
+                try { if (pinned != null) { pinned.close(); pinned = null; } }
+                finally { lifecycle.writeLock().unlock(); }
+            }
+        }
     }
     private void open(HttpsExchange x, TlsIdentity source, TlsIdentity target) throws IOException {
         OpenRequest r = MetadataJson.decode(body(x, "application/json", MetadataCodec.CONTROL_LIMIT), OpenRequest.class);
@@ -134,16 +149,16 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
         }
         if (!r.expiresAt().isAfter(clock.instant())) throw new TransferException(EXPIRED);
         Policy p = r.policy();
-        if (p.mode() != 0 || p.maxWindow() != 1) throw new TransferException(INVALID_MESSAGE);
+        if (p.mode() != 0) throw new TransferException(INVALID_MESSAGE);
         int compressionCode = r.compressionOffers().stream().filter(c -> c == 0 || c == optionalCodec.code()).findFirst()
                 .orElseThrow(() -> new TransferException(INVALID_MESSAGE));
         ChunkCompression codec = CompressionPlan.select(compressionCode, optionalCodec);
         Limits offered = r.limits();
         Limits acceptedLimits = new Limits(Math.min(limits.maxFrameBytes(), offered.maxFrameBytes()), Math.min(limits.maxPlainBytes(), offered.maxPlainBytes()),
-                Math.min(limits.maxChunks(), offered.maxChunks()), Math.min(limits.maxTransferBytes(), offered.maxTransferBytes()), 1);
+                Math.min(limits.maxChunks(), offered.maxChunks()), Math.min(limits.maxTransferBytes(), offered.maxTransferBytes()), Math.min(limits.maxInFlightChunks(), offered.maxInFlightChunks()));
         try { CompressionPlan.validate(p, acceptedLimits, codec, budget.capacity()); }
         catch (IllegalArgumentException e) { throw new TransferException(LIMIT_EXCEEDED); }
-        Policy acceptedPolicy = new Policy(0, 1, p.minChunkBytes(), p.maxChunkBytes(), p.initialChunkBytes(), 1, 1, 1, compressionCode == 0 ? 1 : p.minZstdLevel(), compressionCode == 0 ? 1 : p.maxZstdLevel(), compressionCode == 0 ? 1 : p.initialZstdLevel());
+        Policy acceptedPolicy = new Policy(0, 1, p.minChunkBytes(), p.maxChunkBytes(), p.initialChunkBytes(), p.minWindow(), p.maxWindow(), p.initialWindow(), compressionCode == 0 ? 1 : p.minZstdLevel(), compressionCode == 0 ? 1 : p.maxZstdLevel(), compressionCode == 0 ? 1 : p.initialZstdLevel());
         byte[] challenge = new byte[32]; new SecureRandom().nextBytes(challenge);
         Accepted a = new Accepted(r.transferId(), new Bytes32(challenge), UUID.randomUUID().toString(), compressionCode, acceptedPolicy, acceptedLimits, r.expiresAt());
         if (!key.publicHash().equals(r.targetPublicKeyHash())) throw new AuthenticationException();

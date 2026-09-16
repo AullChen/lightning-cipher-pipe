@@ -1,6 +1,6 @@
 # 固定策略传输
 
-当前参考实现支持 FIXED、NONE/ZSTD、窗口 1。每个 Sink 根目录只允许一个非终态任务，HTTP 入场使用非等待式许可；忙碌时返回 BUSY，避免网络工作线程排队等待磁盘锁。
+当前参考实现支持 FIXED、NONE/ZSTD、窗口 1–16。每个 Sink 根目录只允许一个非终态任务，HTTP 入场使用非等待式许可；忙碌时返回 BUSY，限制在途请求数量。
 
 ## API 与装配
 
@@ -24,6 +24,10 @@
 控制正文为 `application/json`，上限 64 KiB。Chunk/Finish 使用 `application/lcp-frame`。请求必须有精确 Content-Length；拒绝 chunked、Content-Encoding 和 multipart。帧先验证固定前缀与小 AAD，再分配密文缓冲。JSON 中 unsigned 数值使用十进制字符串；可空字段明确输出 null。
 
 ## 持久完成与资源边界
+
+发送端按源顺序分块与构建 Merkle frontier，以有界批次并发发送，物理窗口不超过策略窗口、协商槽位和预算可容纳的完整块数。每块在读取前取得覆盖压缩、封装和发送的峰值许可，所有消费者退出后才释放；不建立随输入长度增长的载荷队列。
+
+目标端原子预留索引与字节范围，互不重叠的 payload 可并发写入，receipt 日志串行追加和刷盘。在途相同描述符返回 BUSY；冲突索引或重叠范围拒绝写入。Finish/Cancel 在存在在途写入时返回 BUSY，会话关闭等待写入退出。
 
 目标 receipt 只在 payload 和日志 force 后返回。相同描述符重放返回 ALREADY_APPLIED，不重复追加日志。活动任务收到认证的冲突块会进入 FAILED；完成态冲突不会修改结果或输出。
 

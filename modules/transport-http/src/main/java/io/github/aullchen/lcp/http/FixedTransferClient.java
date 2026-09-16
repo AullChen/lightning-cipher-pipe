@@ -14,7 +14,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import static io.github.aullchen.lcp.api.TransferStorage.ErrorCode.*;
 
-/** Window-one fixed-policy sender. A failed or uncertain exchange is surfaced without automatic retry. */
+/** Bounded-window fixed-policy sender. A failed or uncertain exchange is surfaced without automatic retry. */
 public final class FixedTransferClient implements AutoCloseable {
     private final AuthenticatedHttpClient http;
     private final HpkeKey key;
@@ -46,7 +46,7 @@ public final class FixedTransferClient implements AutoCloseable {
         boolean chunkerOwnsSource = false;
         try {
             if (!"https".equalsIgnoreCase(endpoint.getScheme()) || endpoint.getRawQuery() != null || endpoint.getRawFragment() != null
-                    || !TransferHttpHandler.BASE.equals(endpoint.getRawPath()) || request.policy().mode() != 0 || request.policy().maxWindow() != 1)
+                    || !TransferHttpHandler.BASE.equals(endpoint.getRawPath()) || request.policy().mode() != 0)
                 throw new IllegalArgumentException("Expected fixed transfer HTTPS endpoint");
             for (int offer : request.compressionOffers()) {
                 ChunkCompression codec = CompressionPlan.select(offer, optionalCodec);
@@ -67,25 +67,49 @@ public final class FixedTransferClient implements AutoCloseable {
             long peak = CompressionPlan.peak(context.accepted().limits(), codec);
             URI transferUri = URI.create(endpoint.toString() + "/" + request.transferId());
             FinishManifest finish;
+            int window = (int) Math.min(context.accepted().policy().initialWindow(), budget.capacity() / peak);
+            var sends = Executors.newFixedThreadPool(window, r -> { var t = new Thread(r, "lcp-chunk"); t.setDaemon(true); return t; });
             try (var chunks = new OrderedChunker(source, Math.toIntExact(context.accepted().policy().initialChunkBytes()),
-                    context.accepted().limits(), budget, peak, Duration.ofSeconds(10))) {
+                    context.accepted().limits(), budget, peak, Duration.ofSeconds(10), window)) {
                 chunkerOwnsSource = true;
-                OrderedChunker.Pending pending;
-                while ((pending = chunks.next()) != null) {
-                    try (var owned = pending) {
-                        Chunk c = owned.chunk();
-                        var prepared = new PreparedChunk(c, codec, context.accepted().policy().initialZstdLevel());
-                        byte[] frame = HpkeFrames.sealChunk(context, key, sourceTls, targetTls,
-                                prepared.aad(request.transferId(), context.bindingHash()), prepared.compressedBytes());
-                        var response = http.exchange(URI.create(transferUri + "/chunks/" + c.index()), "PUT", "application/lcp-frame", frame,
-                                request.targetNodeId(), request.routeId(), directory, MetadataCodec.CONTROL_LIMIT);
-                        context.checkWriter(response.source(), response.target()); success(response);
-                        Receipt receipt = TransferJson.ack(response.body()).receipt();
-                        if (!receipt.equals(new Receipt(request.transferId(), c.index(), c.offset(), c.plainLength(), c.payloadHash()))) throw new AuthenticationException();
+                boolean eof = false;
+                while (!eof) {
+                    var batch = new java.util.ArrayList<Future<Void>>(window);
+                    try {
+                        for (int i = 0; i < window; i++) {
+                            var pending = chunks.next();
+                            if (pending == null) { eof = true; break; }
+                            try {
+                                var prepared = new PreparedChunk(pending.chunk(), codec, context.accepted().policy().initialZstdLevel());
+                                batch.add(sends.submit(() -> {
+                                    try (var owned = pending) {
+                                        byte[] frame = HpkeFrames.sealChunk(context, key, sourceTls, targetTls,
+                                                prepared.aad(request.transferId(), context.bindingHash()), prepared.compressedBytes());
+                                        var response = http.exchange(URI.create(transferUri + "/chunks/" + prepared.receipt(request.transferId()).chunkIndex()), "PUT", "application/lcp-frame", frame,
+                                                request.targetNodeId(), request.routeId(), directory, MetadataCodec.CONTROL_LIMIT);
+                                        context.checkWriter(response.source(), response.target()); success(response);
+                                        if (!TransferJson.ack(response.body()).receipt().equals(prepared.receipt(request.transferId()))) throw new AuthenticationException();
+                                        return null;
+                                    }
+                                }));
+                            } catch (RuntimeException e) { pending.close(); throw e; }
+                        }
+                        for (var sent : batch) await(sent);
+                    } finally {
+                        // Interruption stops new reads, but cannot revoke ownership of running workers.
+                        boolean interrupted = Thread.interrupted();
+                        for (var sent : batch) {
+                            while (true) {
+                                try { sent.get(); break; }
+                                catch (InterruptedException e) { interrupted = true; }
+                                catch (ExecutionException e) { break; }
+                            }
+                        }
+                        if (interrupted) Thread.currentThread().interrupt();
                     }
                 }
                 finish = chunks.finish(request.transferId(), context.bindingHash(), UUID.randomUUID());
-            }
+            } finally { sends.shutdown(); }
             try (var lease = budget.reserve(peak)) {
                 byte[] frame = HpkeFrames.sealFinish(context, key, sourceTls, targetTls, finish);
                 var response = http.exchange(URI.create(transferUri + "/finish"), "POST", "application/lcp-frame", frame,
@@ -101,6 +125,15 @@ public final class FixedTransferClient implements AutoCloseable {
             }
         } finally {
             try { if (!chunkerOwnsSource) source.close(); } finally { active.set(false); }
+        }
+    }
+    private static void await(Future<Void> sent) throws IOException, InterruptedException {
+        try { sent.get(); }
+        catch (ExecutionException e) {
+            if (e.getCause() instanceof IOException failure) throw failure;
+            if (e.getCause() instanceof InterruptedException interrupted) throw interrupted;
+            if (e.getCause() instanceof RuntimeException failure) throw failure;
+            throw new IOException("Chunk worker failed", e.getCause());
         }
     }
     private static void success(AuthenticatedHttpClient.Response response) throws IOException {

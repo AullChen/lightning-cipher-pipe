@@ -11,7 +11,7 @@ class TransferNodeTest extends StorageTestSupport {
     @Test void configurationRejectsUnknownKeysAndUnsupportedPolicy() throws Exception {
         Path file = root.resolve("node.properties"); Files.writeString(file,"unknown=value\n");
         assertThrows(IllegalArgumentException.class, () -> TransferNode.config(file,"source"));
-        Properties p = new Properties(); p.setProperty("inFlightChunks","2");
+        Properties p = new Properties(); p.setProperty("inFlightChunks","17");
         assertThrows(IllegalArgumentException.class, () -> TransferNode.policy(p));
         p.setProperty("inFlightChunks","1"); p.setProperty("compression","NONE");
         assertEquals(1, TransferNode.policy(p).initialZstdLevel());
@@ -35,7 +35,7 @@ class TransferNodeTest extends StorageTestSupport {
         Process server = launch("target",targetFile,targetLog);
         try {
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15); String log = "";
-            while (!log.contains("effectiveWindow=1") && server.isAlive() && System.nanoTime() < deadline) {
+            while (!log.contains("configuredWindow=1") && server.isAlive() && System.nanoTime() < deadline) {
                 if (Files.exists(targetLog)) log = Files.readString(targetLog); Thread.sleep(25);
             }
             var matcher = java.util.regex.Pattern.compile("Listening port=(\\d+)").matcher(log);

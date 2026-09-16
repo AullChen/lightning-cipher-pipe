@@ -11,7 +11,7 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.locks.LockSupport;
 
-/** Single-reader, window-one chunker. Source length is never assumed or pre-scanned.
+/** Single-reader chunker with bounded outstanding leases. Source length is never assumed or pre-scanned.
  * close may be called concurrently to interrupt the source, but never revokes an outstanding lease. */
 public final class OrderedChunker implements AutoCloseable {
     private final TransferSource source;
@@ -24,12 +24,19 @@ public final class OrderedChunker implements AutoCloseable {
     private long offset;
     private volatile boolean closed;
     private boolean eof, failed;
-    private Pending pending;
+    private final java.util.concurrent.atomic.AtomicInteger outstanding = new java.util.concurrent.atomic.AtomicInteger();
+    private final int window;
 
     /** peakBytes reserves the entire downstream lifecycle, not just the source array.
      * It must include at least chunkBytes plus the one-byte EOF probe used here. */
     public OrderedChunker(TransferSource source, int chunkBytes, Limits limits, ByteBudget budget,
                           long peakBytes, Duration zeroReadTimeout) {
+        this(source, chunkBytes, limits, budget, peakBytes, zeroReadTimeout, 1);
+    }
+    public OrderedChunker(TransferSource source, int chunkBytes, Limits limits, ByteBudget budget,
+                          long peakBytes, Duration zeroReadTimeout, int window) {
+        if (window < 1 || window > 16 || window > limits.maxInFlightChunks()) throw new IllegalArgumentException("Invalid window");
+        this.window = window;
         this.source = Objects.requireNonNull(source); this.limits = Objects.requireNonNull(limits);
         this.budget = Objects.requireNonNull(budget);
         if (chunkBytes <= 0 || chunkBytes > limits.maxPlainBytes() || chunkBytes > 8 * 1024 * 1024
@@ -40,10 +47,10 @@ public final class OrderedChunker implements AutoCloseable {
         if (idleNanos <= 0) throw new IllegalArgumentException("Invalid zero-read timeout");
     }
 
-    /** Returns null only at EOF. Release the previous Pending after all consumers finish. */
+    /** Returns null only at EOF. Release each Pending only after all its consumers finish. */
     public Pending next() throws IOException {
         if (closed || failed) throw new IOException("Source is closed or failed");
-        if (pending != null) throw new IllegalStateException("Previous chunk still owns its lease");
+        if (outstanding.get() >= window) throw new IllegalStateException("Previous chunk still owns its lease");
         if (eof) return null;
         ByteBudget.Lease lease = budget.reserve(peakBytes);
         try {
@@ -63,7 +70,7 @@ public final class OrderedChunker implements AutoCloseable {
             Bytes32 hash = new Bytes32(digest.digest());
             Chunk chunk = new Chunk(tree.count(), offset, buffer.remaining(), hash, buffer);
             tree.append(chunk.index(), offset, chunk.plainLength(), hash); offset += chunk.plainLength();
-            pending = new Pending(chunk, lease); return pending;
+            outstanding.incrementAndGet(); return new Pending(chunk, lease);
         } catch (java.security.NoSuchAlgorithmException e) { lease.close(); failed = true; throw new AssertionError(e); }
         catch (IOException | RuntimeException e) { lease.close(); failed = true; throw e; }
     }
@@ -83,7 +90,7 @@ public final class OrderedChunker implements AutoCloseable {
     }
 
     public FinishManifest finish(UUID transferId, Bytes32 bindingHash, UUID commandId) {
-        if (!eof || pending != null || failed || closed) throw new IllegalStateException("Stream not drained");
+        if (!eof || outstanding.get() != 0 || failed || closed) throw new IllegalStateException("Stream not drained");
         return new FinishManifest(transferId, bindingHash, commandId, tree.count(), offset, tree.root());
     }
     @Override public void close() throws IOException { closed = true; source.close(); }
@@ -91,15 +98,15 @@ public final class OrderedChunker implements AutoCloseable {
     public final class Pending implements AutoCloseable {
         private final Chunk chunk;
         private final ByteBudget.Lease lease;
-        private boolean released;
+        private volatile boolean released;
         private Pending(Chunk chunk, ByteBudget.Lease lease) { this.chunk = chunk; this.lease = lease; }
         public Chunk chunk() {
             if (released) throw new IllegalStateException("Chunk released");
             return chunk;
         }
         /** This is ownership release, not a durable ACK. Call only after downstream users exit. */
-        @Override public void close() {
-            if (!released) { released = true; lease.close(); pending = null; }
+        @Override public synchronized void close() {
+            if (!released) { released = true; lease.close(); outstanding.decrementAndGet(); }
         }
     }
 }

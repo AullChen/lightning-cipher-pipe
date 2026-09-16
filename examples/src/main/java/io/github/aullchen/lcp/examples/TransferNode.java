@@ -24,8 +24,8 @@ public final class TransferNode {
         Properties p = new Properties();
         try (var reader = Files.newBufferedReader(path)) { p.load(reader); }
         Set<String> allowed = new HashSet<>(Set.of("nodeId", "peerNodeId", "tlsKeyStore", "tlsTrustStore", "hpkePrivateKey", "hpkeKeyId",
-                "peerHpkeKeyId", "peerHpkePublicKey", "routeId", "maxFrameBytes", "maxPlainBytes", "maxChunks", "maxTransferBytes", "bufferBudget", "metadataBudget"));
-        allowed.addAll(role.equals("source") ? Set.of("peerUrl", "inputFile", "generatorBytes", "generatorSeed", "chunkBytes", "inFlightChunks", "compression", "zstdLevel", "scheduling")
+                "peerHpkeKeyId", "peerHpkePublicKey", "routeId", "maxFrameBytes", "maxPlainBytes", "maxChunks", "maxTransferBytes", "bufferBudget", "metadataBudget", "inFlightChunks"));
+        allowed.addAll(role.equals("source") ? Set.of("peerUrl", "inputFile", "generatorBytes", "generatorSeed", "chunkBytes", "compression", "zstdLevel", "scheduling")
                 : Set.of("listenHost", "listenPort", "outputRoot"));
         for (String name : p.stringPropertyNames()) if (!allowed.contains(name)) throw new IllegalArgumentException("Unknown configuration key: " + name);
         return p;
@@ -45,14 +45,16 @@ public final class TransferNode {
         String value = System.getenv(name); if (value == null || value.isEmpty()) throw new IllegalArgumentException("Set environment variable " + name); return value.toCharArray();
     }
     static Policy policy(Properties p) {
-        if (!p.getProperty("scheduling", "FIXED").equals("FIXED") || number(p,"inFlightChunks",1) != 1)
-            throw new IllegalArgumentException("This launcher currently requires FIXED and window 1");
+        if (!p.getProperty("scheduling", "FIXED").equals("FIXED"))
+            throw new IllegalArgumentException("This launcher currently requires FIXED");
         long chunk = number(p,"chunkBytes",4194304); int level = Math.toIntExact(number(p,"zstdLevel",3));
         if (chunk < 262144 || chunk > 8388608) throw new IllegalArgumentException("Chunk size outside supported range");
         String compression = p.getProperty("compression","ZSTD");
         if (!Set.of("NONE","ZSTD").contains(compression) || level < 1 || level > 5) throw new IllegalArgumentException("Invalid compression configuration");
         if (compression.equals("NONE")) level = 1;
-        return new Policy(0,1,chunk,chunk,chunk,1,1,1,level,level,level);
+        int window = Math.toIntExact(number(p,"inFlightChunks",1));
+        if (window < 1 || window > 16) throw new IllegalArgumentException("Window outside supported range");
+        return new Policy(0,1,chunk,chunk,chunk,window,window,window,level,level,level);
     }
     public static void main(String[] args) throws Exception {
         if (args.length != 2) throw new IllegalArgumentException("Usage: TransferNode source|target configuration.properties");
@@ -69,17 +71,17 @@ public final class TransferNode {
             try (var in = Files.newInputStream(Path.of(required(p,"tlsTrustStore")))) { trust.load(in,trustPassword); }
             tls = TlsContexts.create(keys,keyPassword,trust,peer);
         } finally { Arrays.fill(keyPassword,'\0'); Arrays.fill(trustPassword,'\0'); }
-        var limits = new Limits(number(p,"maxFrameBytes",9437184),number(p,"maxPlainBytes",8388608),number(p,"maxChunks",1000000),number(p,"maxTransferBytes",1099511627776L),1);
+        var limits = new Limits(number(p,"maxFrameBytes",9437184),number(p,"maxPlainBytes",8388608),number(p,"maxChunks",1000000),number(p,"maxTransferBytes",1099511627776L),Math.toIntExact(number(p,"inFlightChunks",1)));
         var budget = new ByteBudget(number(p,"bufferBudget",134217728)); var codec = new ZstdCompression();
         long metadata = number(p,"metadataBudget",134217728);
         if (limits.maxChunks() > metadata / 52) throw new IllegalArgumentException("Chunk index exceeds metadata budget");
         if (role.equals("target")) {
             try (var sink = new FileSink(Path.of(required(p,"outputRoot")),metadata)) {
                 var handler = new TransferHttpHandler(sink,key,directory,route,node,limits,budget,Clock.systemUTC(),Duration.ofMinutes(10),codec);
-                try (var server = new AuthenticatedHttpServer(new InetSocketAddress(p.getProperty("listenHost","127.0.0.1"),Math.toIntExact(number(p,"listenPort",9443))),tls,node,route,directory,2,16,handler)) {
+                try (var server = new AuthenticatedHttpServer(new InetSocketAddress(p.getProperty("listenHost","127.0.0.1"),Math.toIntExact(number(p,"listenPort",9443))),tls,node,route,directory,Math.toIntExact(limits.maxInFlightChunks())+1,32,handler)) {
                     CountDownLatch stopped = new CountDownLatch(1);
                     Thread shutdown = new Thread(stopped::countDown,"lcp-stop"); Runtime.getRuntime().addShutdownHook(shutdown);
-                    System.out.println("Listening port=" + server.port() + " effectiveWindow=1");
+                    System.out.println("Listening port=" + server.port() + " configuredWindow=" + limits.maxInFlightChunks());
                     try { stopped.await(); } finally { try { Runtime.getRuntime().removeShutdownHook(shutdown); } catch (IllegalStateException ignored) { } }
                 }
             }
@@ -91,11 +93,11 @@ public final class TransferNode {
             UUID id = UUID.randomUUID(); var request = new OpenRequest(id,route,node,peer,new Bytes32(challenge),required(p,"hpkeKeyId"),key.publicHash(),required(p,"peerHpkeKeyId"),
                     MetadataCodec.hash(small(Path.of(required(p,"peerHpkePublicKey")))),List.of(code),policy,limits,now,now.plusSeconds(86400));
             URI endpoint = URI.create(required(p,"peerUrl") + TransferHttpHandler.BASE);
-            try (var http = new AuthenticatedHttpClient(tls,Duration.ofSeconds(10),Duration.ofMinutes(11),2,16);
+            try (var http = new AuthenticatedHttpClient(tls,Duration.ofSeconds(10),Duration.ofMinutes(11),Math.toIntExact(limits.maxInFlightChunks())+1,32);
                  var sender = new FixedTransferClient(http,key,directory,budget,Clock.systemUTC(),codec)) {
                 TransferSource source = p.containsKey("inputFile") ? new FileSource(Path.of(required(p,"inputFile")))
                         : new GeneratorSource(number(p,"generatorBytes",0),number(p,"generatorSeed",42));
-                System.out.println("transferId=" + id + " effectiveWindow=1");
+                System.out.println("transferId=" + id + " configuredWindow=" + limits.maxInFlightChunks());
                 var result = sender.start(endpoint,request,source).toCompletableFuture().get();
                 System.out.println("COMPLETED handleId=" + result.handleId() + " bytes=" + result.totalPlainBytes());
             }

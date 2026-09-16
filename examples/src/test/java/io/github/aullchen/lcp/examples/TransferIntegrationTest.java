@@ -45,15 +45,16 @@ class TransferIntegrationTest extends StorageTestSupport {
         final TestClock clock = new TestClock();
         final FileSink sink;
         final ByteBudget targetBudget = new ByteBudget(64 * 1024 * 1024), sourceBudget = new ByteBudget(64 * 1024 * 1024);
-        final AuthenticatedHttpClient http = new AuthenticatedHttpClient(sourceTls, Duration.ofSeconds(3), TIMEOUT, 2, 16);
+        final AuthenticatedHttpClient http = new AuthenticatedHttpClient(sourceTls, Duration.ofSeconds(3), TIMEOUT, 5, 32);
         final FixedTransferClient sender = new FixedTransferClient(http, sourceKey, directory, sourceBudget, clock, new io.github.aullchen.lcp.compression.ZstdCompression());
         final AuthenticatedHttpServer server;
         final URI endpoint;
         Pair() throws Exception { this(new FileSink.Io() {}); }
-        Pair(FileSink.Io io) throws Exception {
+        Pair(FileSink.Io io) throws Exception { this(io, LIMITS); }
+        Pair(FileSink.Io io, Limits bounds) throws Exception {
             sink = new FileSink(root, 128 * 52, io);
-            var handler = new TransferHttpHandler(sink, targetKey, directory, "demo", "target", LIMITS, targetBudget, clock, TIMEOUT, new io.github.aullchen.lcp.compression.ZstdCompression());
-            server = new AuthenticatedHttpServer(new InetSocketAddress("127.0.0.1", 0), targetTls, "target", "demo", directory, 2, 8, handler);
+            var handler = new TransferHttpHandler(sink, targetKey, directory, "demo", "target", bounds, targetBudget, clock, TIMEOUT, new io.github.aullchen.lcp.compression.ZstdCompression());
+            server = new AuthenticatedHttpServer(new InetSocketAddress("127.0.0.1", 0), targetTls, "target", "demo", directory, 5, 16, handler);
             endpoint = URI.create("https://localhost:" + server.port() + TransferHttpHandler.BASE);
         }
         OpenRequest request() {
@@ -98,6 +99,30 @@ class TransferIntegrationTest extends StorageTestSupport {
             byte[] actual = Files.readAllBytes(root.resolve(request.transferId() + "/payload.bin"));
             var random = new SplittableRandom(42); byte[] expected = new byte[length]; for (int i = 0; i < length; i++) expected[i] = (byte) random.nextInt(256);
             assertArrayEquals(expected, actual); assertEquals(0, pair.sourceBudget.used()); assertEquals(0, pair.targetBudget.used());
+        }
+    }
+    @Test void concurrentWindowCompletesWithSourceOrderRoot() throws Exception {
+        var bounds = new Limits(300000, 262144, 128, 16 * 1024 * 1024, 3);
+        CountDownLatch writes = new CountDownLatch(3);
+        var io = new FileSink.Io() {
+            @Override public void after(FileSink.Boundary b) throws IOException {
+                if (b == FileSink.Boundary.PAYLOAD_WRITTEN) {
+                    writes.countDown();
+                    try { if (!writes.await(5, TimeUnit.SECONDS)) throw new IOException("Writes were serialized"); }
+                    catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IOException(e); }
+                }
+            }
+        };
+        try (var pair = new Pair(io, bounds)) {
+            var old = pair.request(); var policy = new Policy(0,1,262144,262144,262144,3,3,3,1,1,1);
+            var request = new OpenRequest(old.transferId(),old.routeId(),old.sourceNodeId(),old.targetNodeId(),old.sourceChallenge(),
+                    old.sourceKeyId(),old.sourcePublicKeyHash(),old.targetKeyId(),old.targetPublicKeyHash(),List.of(0),policy,bounds,old.createdAt(),old.expiresAt());
+            var result = pair.sender.transfer(pair.endpoint, request, new GeneratorSource(7 * 262144 + 3, 42));
+            assertEquals(8, result.totalChunks());
+            var random = new SplittableRandom(42);
+            byte[] output = Files.readAllBytes(root.resolve(request.transferId() + "/payload.bin"));
+            for (byte b : output) assertEquals((byte) random.nextInt(256), b);
+            assertEquals(0, pair.sourceBudget.used()); assertEquals(0, pair.targetBudget.used());
         }
     }
     @Test void durableOpenReplayConflictBusyAndExpiry() throws Exception {

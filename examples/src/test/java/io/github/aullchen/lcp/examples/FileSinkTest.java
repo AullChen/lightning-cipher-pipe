@@ -16,11 +16,12 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
 
 class FileSinkTest extends StorageTestSupport {
-    static AcceptedTransfer transfer() {
+    static AcceptedTransfer transfer() { return transfer(1); }
+    static AcceptedTransfer transfer(int window) {
         UUID id = UUID.randomUUID(); Bytes32 hash = MetadataCodec.hash(new byte[0]);
         Instant now = Instant.parse("2026-09-11T00:00:00Z");
-        Policy p = new Policy(0, 1, 4, 4, 4, 1, 1, 1, 1, 1, 1);
-        Limits l = new Limits(4096, 4, 16, 64, 1);
+        Policy p = new Policy(0, 1, 4, 4, 4, window, window, window, 1, 1, 1);
+        Limits l = new Limits(4096, 4, 16, 64, window);
         OpenRequest r = new OpenRequest(id, "route", "source", "target", hash, "source-key", hash,
                 "target-key", hash, List.of(0), p, l, now, now.plusSeconds(3600));
         Accepted a = new Accepted(id, hash, id.toString(), 0, p, l, r.expiresAt());

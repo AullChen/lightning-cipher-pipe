@@ -16,7 +16,7 @@ public final class CompressionPlan {
     }
     public static void validate(Policy policy, Limits limits, ChunkCompression codec, long budget) {
         if (policy.maxChunkBytes() > 8 * 1024 * 1024 || policy.maxChunkBytes() > limits.maxPlainBytes()
-                || policy.maxWindow() > limits.maxInFlightChunks()
+                || policy.maxWindow() > 16 || policy.maxWindow() > limits.maxInFlightChunks()
                 || codec.compressBound(policy.maxChunkBytes()) + 4160 > limits.maxFrameBytes()
                 || budget < Math.max(262144, peak(limits, codec))) throw new IllegalArgumentException("Inconsistent compression or resource bounds");
     }

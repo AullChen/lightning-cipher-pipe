@@ -14,7 +14,7 @@
 
 先准备各节点的 PKCS12 TLS 身份库、信任库、X25519 PKCS8 私钥及对端 SPKI 公钥。身份库中的证书须具备匹配节点的 URI SAN、对应的 clientAuth/serverAuth 用途，服务端 DNS SAN 必须匹配连接主机名。使用各自的 `LCP_KEYSTORE_PASSWORD` 与 `LCP_TRUSTSTORE_PASSWORD` 环境变量提供密码；配置文件不包含密码。
 
-参考配置为 `examples/config/source.properties` 和 `target.properties`。路径相对启动目录，未知键直接拒绝。支持 FileSource 或 GeneratorSource，二者使用同一异步发送入口。当前启动器为 FIXED、窗口 1，输出实际窗口和 transferId，完成时输出 handleId 与字节数。
+参考配置为 `examples/config/source.properties` 和 `target.properties`。路径相对启动目录，未知键直接拒绝。支持 FileSource 或 GeneratorSource，二者使用同一异步发送入口。当前启动器为 FIXED，两端通过 `inFlightChunks` 配置 1–16 的窗口，输出配置窗口和 transferId，完成时输出 handleId 与字节数。
 
 构建运行类路径：
 
