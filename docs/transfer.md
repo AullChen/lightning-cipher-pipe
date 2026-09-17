@@ -33,7 +33,7 @@
 
 Finish 在 receipt 数量、偏移连续性与总长度吻合后进入 VERIFYING。引擎以 64 KiB 缓冲重读持久数据，逐块重算 SHA-256 与 Merkle 根，并检查最后一字节后的 EOF；仅一致时持久记录 COMPLETED。相同 Finish 重放返回既有结果，不再次验证；不同命令或清单返回 COMMAND_CONFLICT。重读失败不会产生完成结果。
 
-帧处理和源端单块生命周期预留 `8 × maxFrameBytes + 2 × maxPlainBytes + 65536` 字节，覆盖显式载荷、帧与密码处理副本和验证缓冲；ZSTD 另计原生工作区，详见[压缩与启动示例](compression.md)。控制消息预留 256 KiB。FileSink 的索引和源端 receipt 历史分别受 `metadataBudget` 约束，启动时要求 `maxChunks × 52 ≤ metadataBudget`；源端以紧凑数组保存全部已分配描述符与确认标志，不保留历史载荷。发送器的重载构造器接受元数据预算，默认 128 MiB。这些是应用缓冲上限，不是 JVM RSS 承诺；TLS、线程栈和运行时仍有固定开销。
+整块生命周期预留取两项峰值的较大者：数据处理为 `8 × maxFrameBytes + 2 × maxPlainBytes + 65536 + codecWorkspace`；对账为 `256 KiB + maxPlainBytes + compressBound(maxPlainBytes)`。后者覆盖控制响应及仍持有的明文与压缩材料，避免小帧配置低估预算。ZSTD 工作区详见[压缩与启动示例](compression.md)。独立控制消息预留 256 KiB。FileSink 的索引和源端 receipt 历史分别受 `metadataBudget` 约束，启动时要求 `maxChunks × 52 ≤ metadataBudget`；源端以紧凑数组保存全部已分配描述符与确认标志，不保留历史载荷。发送器的重载构造器接受元数据预算，默认 128 MiB。这些是应用缓冲上限，不是 JVM RSS 承诺；TLS、线程栈和运行时仍有固定开销。
 
 ## 对账与重试
 

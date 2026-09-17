@@ -59,7 +59,7 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
                 || verificationTimeout.isNegative() || verificationTimeout.isZero()) throw new IllegalArgumentException("Invalid fixed transfer bounds");
     }
     /** Conservative live-array reservation including framing, HPKE copies, plaintext and verification scratch. */
-    public static long peak(Limits limits) { return 8 * limits.maxFrameBytes() + 2 * limits.maxPlainBytes() + 65536; }
+    public static long peak(Limits limits) { return CompressionPlan.peak(limits,ChunkCompression.NONE); }
     @Override public void handle(HttpsExchange x, TlsIdentity source, TlsIdentity target) throws IOException {
         if (closed) { error(x,UNAVAILABLE); return; }
         boolean opening = BASE.equals(x.getRequestURI().getRawPath()) && "POST".equals(x.getRequestMethod());

@@ -378,6 +378,28 @@ class TransferIntegrationTest extends StorageTestSupport {
             assertEquals(0,pair.sourceBudget.used()); assertEquals(1,closes.get());
         } finally { release.countDown(); }
     }
+    @ParameterizedTest @ValueSource(ints={8192,16384})
+    void smallFrameReconciliationKeepsControlAndRetainedPayloadReserved(int frameBytes) throws Exception {
+        var bounds=new Limits(frameBytes,1,4,4,2);
+        long required=4L*MetadataCodec.CONTROL_LIMIT+2;
+        var budget=new ByteBudget(required);
+        var busy=new java.util.concurrent.atomic.AtomicBoolean();
+        var observed=new java.util.concurrent.atomic.AtomicLong(Long.MAX_VALUE);
+        try (var pair=new Pair(new FileSink.Io(){},bounds,handler -> (x,source,target) -> {
+            if (x.getRequestURI().getPath().endsWith("/chunks/0") && !busy.getAndSet(true)) {
+                x.getRequestBody().readAllBytes(); byte[] error=TransferJson.error(ErrorCode.BUSY);
+                x.sendResponseHeaders(429,error.length); x.getResponseBody().write(error); return;
+            }
+            if (x.getRequestMethod().equals("GET")) observed.accumulateAndGet(budget.used(),Math::min);
+            handler.handle(x,source,target);
+        }); var sender=new FixedTransferClient(pair.http,sourceKey,directory,budget,pair.clock)) {
+            var result=sender.transfer(pair.endpoint,requestWith(pair,bounds,1,2),new GeneratorSource(2,42));
+            assertEquals(2,result.totalPlainBytes());
+            assertNotEquals(Long.MAX_VALUE,observed.get());
+            assertTrue(observed.get()>=required,"Reconciliation borrowed unreserved control memory: "+observed.get());
+            assertEquals(0,budget.used());
+        }
+    }
     private static OpenRequest requestWith(Pair pair, Limits bounds, int chunk, int window) {
         var old = pair.request(); var policy = new Policy(0,1,chunk,chunk,chunk,window,window,window,1,1,1);
         return new OpenRequest(old.transferId(),old.routeId(),old.sourceNodeId(),old.targetNodeId(),old.sourceChallenge(),
