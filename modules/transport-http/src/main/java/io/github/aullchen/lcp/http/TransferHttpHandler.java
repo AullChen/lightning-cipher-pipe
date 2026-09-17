@@ -17,7 +17,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import static io.github.aullchen.lcp.api.TransferStorage.ErrorCode.*;
 
 /** Fixed-policy endpoints with bounded concurrent request admission and pinned sessions. */
-public final class TransferHttpHandler implements AuthenticatedHttpServer.Handler {
+public final class TransferHttpHandler implements AuthenticatedHttpServer.Handler, AutoCloseable {
     public static final String BASE = "/lcp-stream/v1/transfers";
     private final TransferSink sink;
     private final HpkeKey key;
@@ -30,6 +30,12 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
     private final Duration verificationTimeout;
     private final ReentrantReadWriteLock lifecycle = new ReentrantReadWriteLock();
     private final Semaphore slots;
+    private final Semaphore controls = new Semaphore(2);
+    private final BoundedExecutor verifier = new BoundedExecutor(1,1,"lcp-verify");
+    private final Duration shutdownGrace;
+    private volatile Verification verification;
+    private volatile boolean closed;
+    private record Verification(SinkSession session, FinishManifest manifest, java.util.concurrent.CompletableFuture<Void> done) {}
     private volatile SinkSession pinned;
     public TransferHttpHandler(TransferSink sink, HpkeKey key, PeerDirectory directory, String route, String node,
                                Limits limits, ByteBudget budget, Clock clock, Duration verificationTimeout) {
@@ -37,6 +43,12 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
     }
     public TransferHttpHandler(TransferSink sink, HpkeKey key, PeerDirectory directory, String route, String node,
                                Limits limits, ByteBudget budget, Clock clock, Duration verificationTimeout, ChunkCompression optionalCodec) {
+        this(sink,key,directory,route,node,limits,budget,clock,verificationTimeout,optionalCodec,Duration.ofSeconds(60));
+    }
+    public TransferHttpHandler(TransferSink sink, HpkeKey key, PeerDirectory directory, String route, String node,
+                               Limits limits, ByteBudget budget, Clock clock, Duration verificationTimeout, ChunkCompression optionalCodec, Duration shutdownGrace) {
+        if (shutdownGrace.isNegative() || shutdownGrace.isZero()) throw new IllegalArgumentException("Invalid shutdown grace");
+        this.shutdownGrace = shutdownGrace;
         this.optionalCodec = Objects.requireNonNull(optionalCodec);
         this.sink = Objects.requireNonNull(sink); this.key = Objects.requireNonNull(key); this.directory = Objects.requireNonNull(directory);
         this.route = Objects.requireNonNull(route); this.node = Objects.requireNonNull(node); this.limits = Objects.requireNonNull(limits);
@@ -49,15 +61,19 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
     /** Conservative live-array reservation including framing, HPKE copies, plaintext and verification scratch. */
     public static long peak(Limits limits) { return 8 * limits.maxFrameBytes() + 2 * limits.maxPlainBytes() + 65536; }
     @Override public void handle(HttpsExchange x, TlsIdentity source, TlsIdentity target) throws IOException {
+        if (closed) { error(x,UNAVAILABLE); return; }
         boolean opening = BASE.equals(x.getRequestURI().getRawPath()) && "POST".equals(x.getRequestMethod());
         var lock = opening ? lifecycle.writeLock() : lifecycle.readLock();
         if (!lock.tryLock()) { error(x, BUSY); return; }
-        if (!slots.tryAcquire()) { lock.unlock(); error(x, BUSY); return; }
+        Semaphore admission = x.getRequestURI().getRawPath().contains("/chunks/") ? slots : controls;
+        if (!admission.tryAcquire()) { lock.unlock(); error(x, BUSY); return; }
         try {
             if (!node.equals(target.nodeId())) throw new AuthenticationException();
             String path = x.getRequestURI().getRawPath(), method = x.getRequestMethod();
             if (BASE.equals(path) && "POST".equals(method)) {
                 if (x.getRequestURI().getRawQuery() != null) throw new TransferException(INVALID_MESSAGE);
+                if (running()) throw new TransferException(BUSY);
+                if (pinned != null) { pinned.close(); pinned = null; }
                 try (var lease = reserve(4L * MetadataCodec.CONTROL_LIMIT)) { open(x, source, target); }
                 return;
             }
@@ -69,6 +85,7 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
                 BoundTransfer context = BoundTransfer.restore(session.state().transfer(), directory);
                 if ("GET".equals(method)) {
                     context.checkReader(source); emptyBody(x);
+                    if (session.state().state() == State.VERIFYING) resume(session);
                     try (var lease = reserve(4L * MetadataCodec.CONTROL_LIMIT)) {
                         if (parts.length == 1 && x.getRequestURI().getRawQuery() == null) send(x, 200, TransferJson.status(session.state()));
                         else if (parts.length == 2 && parts[1].equals("receipts")) {
@@ -104,18 +121,26 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
                         }
                     }
                 } else if (parts.length == 2 && parts[1].equals("finish") && "POST".equals(method)) {
+                    FinishManifest f;
                     try (var lease = reserve(CompressionPlan.peak(context.accepted().limits(), CompressionPlan.select(context.accepted().compressionCode(), optionalCodec)))) {
                         byte[] body = frameBody(x, context.accepted().limits(), Math.min(8192, context.accepted().limits().maxFrameBytes()));
-                        FinishManifest f = HpkeFrames.openFinish(context, key, source, target, id, ByteBuffer.wrap(body));
-                        if (session.state().finish() == null) unexpired(context);
-                        TransferVerifier.finish(session, f, clock, verificationTimeout);
-                        send(x, 200, TransferJson.status(session.state()));
+                        f = HpkeFrames.openFinish(context, key, source, target, id, ByteBuffer.wrap(body));
                     }
+                    if (session.state().finish() == null) unexpired(context);
+                    startVerification(session,f);
+                    Verification task = verification;
+                    if (task != null) await(task,Duration.ofMillis(100),false);
+                    var state = session.state();
+                    if (state.state() == State.FAILED || state.state() == State.RECOVERY_REQUIRED) throw new TransferException(state.error());
+                    send(x,state.state() == State.VERIFYING ? 202 : 200,TransferJson.status(state));
                 } else if (parts.length == 2 && parts[1].equals("cancel") && "POST".equals(method)) {
                     try (var lease = reserve(4L * MetadataCodec.CONTROL_LIMIT)) {
                         CancelCommand command = TransferJson.cancel(body(x, "application/json", MetadataCodec.CONTROL_LIMIT));
                         if (!command.transferId().equals(id)) throw new TransferException(INVALID_MESSAGE);
-                        send(x, 200, TransferJson.status(session.cancel(command)));
+                        var state = session.cancel(command);
+                        Verification task = verification;
+                        if (task != null && task.session() == session) await(task,shutdownGrace,true);
+                        send(x, 200, TransferJson.status(state));
                     }
                 } else throw new TransferException(NOT_FOUND);
             }
@@ -125,13 +150,54 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
         catch (IllegalArgumentException e) { error(x, INVALID_MESSAGE); }
         catch (IOException e) { error(x, UNKNOWN_COMMIT); }
         finally {
-            slots.release(); lock.unlock();
-            // Only the last reader may close the shared session; never close another request's channels.
-            if (lifecycle.writeLock().tryLock()) {
-                try { if (pinned != null) { pinned.close(); pinned = null; } }
-                finally { lifecycle.writeLock().unlock(); }
-            }
+            admission.release(); lock.unlock(); cleanupPinned();
         }
+    }
+    private boolean running() { var task = verification; return task != null && !task.done().isDone(); }
+    private void cleanupPinned() throws IOException {
+        if (lifecycle.writeLock().tryLock()) {
+            try { if (!running() && pinned != null) { pinned.close(); pinned = null; } }
+            finally { lifecycle.writeLock().unlock(); }
+        }
+    }
+    /** Resume the durable Finish at startup or upon an authenticated status request. */
+    public void resume(SinkSession session) throws IOException {
+        var state = session.state();
+        if (!state.transfer().request().targetNodeId().equals(node) || !state.transfer().request().routeId().equals(route)) throw new AuthenticationException();
+        if (state.state() == State.VERIFYING) startVerification(session,state.finish());
+    }
+    private synchronized void startVerification(SinkSession session, FinishManifest manifest) throws IOException {
+        if (closed) throw new TransferException(UNAVAILABLE);
+        if (running()) {
+            if (verification.session() != session) throw new TransferException(BUSY);
+            if (!verification.manifest().equals(manifest)) throw new TransferException(COMMAND_CONFLICT);
+            return;
+        }
+        if (session.state().state() == State.COMPLETED) { session.recordVerifying(manifest); return; }
+        var lease = reserve(4L*MetadataCodec.CONTROL_LIMIT);
+        try {
+            session.recordVerifying(manifest); pinned = session;
+            var task = new Verification(session,manifest,new java.util.concurrent.CompletableFuture<>());
+            verification = task;
+            verifier.execute(() -> {
+                try { TransferVerifier.finish(session,manifest,clock,verificationTimeout); }
+                catch (IOException ignored) { /* The verifier records the durable failure before returning. */ }
+                catch (RuntimeException failure) {
+                    try { session.recordFailure(FailureKind.RECOVERY_REQUIRED,UNKNOWN_COMMIT); } catch (IOException ignored) { }
+                } finally { lease.close(); task.done().complete(null); }
+            });
+        } catch (IOException | RuntimeException e) { lease.close(); throw e; }
+    }
+    private static void await(Verification task, Duration timeout, boolean required) throws IOException {
+        try { task.done().get(timeout.toNanos(),java.util.concurrent.TimeUnit.NANOSECONDS); }
+        catch (java.util.concurrent.TimeoutException e) { if (required) throw new TransferException(UNKNOWN_COMMIT); }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new TransferException(UNKNOWN_COMMIT); }
+        catch (java.util.concurrent.ExecutionException e) { throw new IOException("Verification worker failed",e.getCause()); }
+    }
+    @Override public void close() throws IOException {
+        synchronized (this) { closed = true; verifier.shutdown(); }
+        var task = verification; if (task != null) await(task,shutdownGrace,true);
+        cleanupPinned();
     }
     private void open(HttpsExchange x, TlsIdentity source, TlsIdentity target) throws IOException {
         OpenRequest r = MetadataJson.decode(body(x, "application/json", MetadataCodec.CONTROL_LIMIT), OpenRequest.class);

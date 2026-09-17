@@ -57,6 +57,13 @@ public final class TransferJson {
                 "finish", f == null ? null : object("commandId", f.commandId(), "totalChunks", f.totalChunks(), "totalPlainBytes", f.totalPlainBytes(), "root", f.root(), "manifestHash", MetadataCodec.manifestHash(f)),
                 "result", result(s.result()), "error", s.error() == null ? null : errorObject(s.error())));
     }
+    public static byte[] status(Status s) {
+        var f=s.finish();
+        return encode(object("transferId",s.transferId(),"state",s.state().name(),"revision",s.revision(),
+                "committedChunks",s.committedChunks(),"committedPlainBytes",s.committedPlainBytes(),"expiresAt",s.expiresAt().toEpochMilli(),
+                "finish",f==null ? null : object("commandId",f.commandId(),"totalChunks",f.totalChunks(),"totalPlainBytes",f.totalPlainBytes(),"root",f.root(),"manifestHash",f.manifestHash()),
+                "result",result(s.result()),"error",s.error()==null ? null : errorObject(s.error())));
+    }
     private static byte[] encode(Object v) {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         try (JsonGenerator g = JSON.createGenerator(bytes)) { write(g, v); }

@@ -35,8 +35,11 @@ final class CanonicalCbor {
     }
 
     static Object decode(byte[] bytes, int maximum) {
+        return decode(bytes,maximum,32,64);
+    }
+    static Object decode(byte[] bytes, int maximum, int blobLimit, int textLimit) {
         if (bytes.length > maximum) throw ProtocolException.limit();
-        var reader = new Reader(bytes);
+        var reader = new Reader(bytes,blobLimit,textLimit);
         Object value = reader.read(0);
         if (reader.position != bytes.length) throw ProtocolException.invalid();
         return value;
@@ -45,7 +48,8 @@ final class CanonicalCbor {
     private static final class Reader {
         private final byte[] bytes;
         private int position;
-        Reader(byte[] bytes) { this.bytes = bytes; }
+        private final int blobLimit, textLimit;
+        Reader(byte[] bytes,int blobLimit,int textLimit) { this.bytes = bytes; this.blobLimit=blobLimit; this.textLimit=textLimit; }
 
         private int octet() {
             if (position == bytes.length) throw ProtocolException.invalid();
@@ -79,7 +83,7 @@ final class CanonicalCbor {
                 for (int i = 0; i < n; i++) items.add(read(depth + 1));
                 return items;
             }
-            if (n > (major == 2 ? 32 : 64) || n > bytes.length - position) throw ProtocolException.invalid();
+            if (n > (major == 2 ? blobLimit : textLimit) || n > bytes.length - position) throw ProtocolException.invalid();
             byte[] result = new byte[(int) n];
             System.arraycopy(bytes, position, result, 0, result.length); position += result.length;
             if (major == 2) return result;

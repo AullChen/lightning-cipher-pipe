@@ -32,6 +32,7 @@ public final class TransferVerifier {
                     if (r.chunkIndex() != merkle.count() || r.offset() != offset) throw new TransferException(INTEGRITY_MISMATCH);
                     MessageDigest hash = sha256(); long remaining = r.plainLength();
                     while (remaining > 0) {
+                        if (session.state().state() != State.VERIFYING) throw new TransferException(STATE_CONFLICT);
                         if (Thread.currentThread().isInterrupted() || System.nanoTime() - started >= timeout.toNanos()) throw new IOException("Verification deadline exceeded");
                         bytes.clear().limit((int) Math.min(bytes.capacity(), remaining));
                         int n = session.readPersisted(offset, bytes);
@@ -49,6 +50,7 @@ public final class TransferVerifier {
                     || session.readPersisted(offset, bytes) != -1) throw new TransferException(INTEGRITY_MISMATCH);
             var result = new VerifiedResult(before.transfer().response().accepted().handleId(), manifest.totalChunks(),
                     offset, merkle.root(), MetadataCodec.manifestHash(manifest), clock.instant().truncatedTo(java.time.temporal.ChronoUnit.MILLIS));
+            if (Thread.currentThread().isInterrupted() || System.nanoTime()-started>=timeout.toNanos()) throw new IOException("Verification deadline exceeded");
             session.recordCompleted(result); return result;
         } catch (IOException e) {
             ErrorCode code = e instanceof TransferException t ? t.code() : UNKNOWN_COMMIT;

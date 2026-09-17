@@ -39,7 +39,7 @@ class FileSinkCrashTest extends StorageTestSupport {
             assertThrows(TransferException.class,() -> session.commit(FileSinkTest.chunk(1,2,(byte)3,(byte)4)));
         }
     }
-    @ParameterizedTest @ValueSource(strings={"PAYLOAD_WRITTEN","PAYLOAD_FORCED","RECEIPT_WRITTEN","RECEIPT_FORCED","INDEX_PUBLISHED","ACK_RETURNED"})
+    @ParameterizedTest @ValueSource(strings={"PAYLOAD_WRITTEN","PAYLOAD_FORCED","RECEIPT_WRITTEN","RECEIPT_FORCED","INDEX_PUBLISHED","ACK_RETURNED","VERIFYING_PERSISTED","COMPLETED_PERSISTED"})
     void processExitPreservesAcknowledgedChunksAndAllowsSafeReplay(String boundary) throws Exception {
         var t = FileSinkTest.transfer(); crash(t,boundary);
         Path output = root.resolve("output");
@@ -55,7 +55,7 @@ class FileSinkCrashTest extends StorageTestSupport {
             assertEquals(136,Files.size(output.resolve(t.request().transferId()+"/receipts.log")));
             MerkleFrontier tree = new MerkleFrontier();
             tree.append(0,0,2,MetadataCodec.hash(new byte[]{1,2})); tree.append(1,2,2,MetadataCodec.hash(new byte[]{3,4}));
-            var finish = new FinishManifest(t.request().transferId(),t.response().bindingHash(),UUID.randomUUID(),2,4,tree.root());
+            var finish = s.state().finish()!=null ? s.state().finish() : new FinishManifest(t.request().transferId(),t.response().bindingHash(),UUID.randomUUID(),2,4,tree.root());
             TransferVerifier.finish(s,finish,Clock.systemUTC(),Duration.ofSeconds(5));
             assertEquals(State.COMPLETED,s.state().state());
             assertArrayEquals(new byte[]{1,2,3,4},Files.readAllBytes(output.resolve(t.request().transferId()+"/payload.bin")));
@@ -86,6 +86,13 @@ class FileSinkCrashTest extends StorageTestSupport {
                 // This chunk's ACK has already returned before the second write starts.
                 armed[0] = true; s.commit(FileSinkTest.chunk(1,2,(byte)3,(byte)4));
                 if (args[2].equals("ACK_RETURNED")) Runtime.getRuntime().halt(71);
+                if (args[2].equals("VERIFYING_PERSISTED") || args[2].equals("COMPLETED_PERSISTED")) {
+                    var tree=new MerkleFrontier(); tree.append(0,0,2,MetadataCodec.hash(new byte[]{1,2})); tree.append(1,2,2,MetadataCodec.hash(new byte[]{3,4}));
+                    var manifest=new FinishManifest(t.request().transferId(),t.response().bindingHash(),UUID.randomUUID(),2,4,tree.root());
+                    s.recordVerifying(manifest);
+                    if (args[2].equals("COMPLETED_PERSISTED")) TransferVerifier.finish(s,manifest,Clock.systemUTC(),Duration.ofSeconds(5));
+                    Runtime.getRuntime().halt(71);
+                }
             }
             throw new AssertionError("Crash boundary not reached");
         }

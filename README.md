@@ -26,6 +26,6 @@ Windows 对应使用 `mvnw.cmd`。首次运行需要下载固定版本的 Maven 
 
 自动化测试覆盖独立[协议向量](protocol/vectors/README.md)、持久化故障、跨进程锁及空流、1 字节、跨块的真实 TLS 传输。帧认证成功不等于传输完成：目标必须重读持久输出，通过摘要、Merkle 根和长度校验后才能发布 COMPLETED。
 
-当前支持单任务、1–16 的有界窗口和 NONE/ZSTD。已支持 ACK 丢失后的分页对账与有界重试；源控制记录、进程退出后的完整恢复流程和反馈调度尚未完成。
+当前支持单任务、1–16 的有界窗口和 NONE/ZSTD。已支持 ACK 丢失后的分页对账与有界重试；已支持源控制记录、目标重启、VERIFYING 恢复和取消竞争处理。反馈调度与性能实验尚未完成。
 
 参见[压缩与启动示例](docs/compression.md)、[固定策略传输](docs/transfer.md)、[文件持久化](docs/storage.md)、[实现状态](docs/development-progress.md)、[构建与依赖](docs/build-baseline.md)及[认证边界](docs/security.md)。

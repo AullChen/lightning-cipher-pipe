@@ -48,13 +48,14 @@ class TransferIntegrationTest extends StorageTestSupport {
         final AuthenticatedHttpClient http = new AuthenticatedHttpClient(sourceTls, Duration.ofSeconds(3), TIMEOUT, 5, 32);
         final FixedTransferClient sender = new FixedTransferClient(http, sourceKey, directory, sourceBudget, clock, new io.github.aullchen.lcp.compression.ZstdCompression());
         final AuthenticatedHttpServer server;
+        final TransferHttpHandler handler;
         final URI endpoint;
         Pair() throws Exception { this(new FileSink.Io() {}); }
         Pair(FileSink.Io io) throws Exception { this(io, LIMITS); }
         Pair(FileSink.Io io, Limits bounds) throws Exception { this(io,bounds,h -> h); }
         Pair(FileSink.Io io, Limits bounds, java.util.function.UnaryOperator<AuthenticatedHttpServer.Handler> decorate) throws Exception {
             sink = new FileSink(root, bounds.maxChunks() * 52, io);
-            var handler = new TransferHttpHandler(sink, targetKey, directory, "demo", "target", bounds, targetBudget, clock, TIMEOUT, new io.github.aullchen.lcp.compression.ZstdCompression());
+            handler = new TransferHttpHandler(sink, targetKey, directory, "demo", "target", bounds, targetBudget, clock, TIMEOUT, new io.github.aullchen.lcp.compression.ZstdCompression());
             server = new AuthenticatedHttpServer(new InetSocketAddress("127.0.0.1", 0), targetTls, "target", "demo", directory, 5, 16, decorate.apply(handler));
             endpoint = URI.create("https://localhost:" + server.port() + TransferHttpHandler.BASE);
         }
@@ -72,7 +73,7 @@ class TransferIntegrationTest extends StorageTestSupport {
             return new Opened(BoundTransfer.freeze(request, response.accepted(), r.source(), r.target(), directory, clock.now), r.source(), r.target());
         }
         TransferJson.Status status(UUID id) throws Exception { var r = call("/" + id, "GET", null, new byte[0]); assertEquals(200, r.status()); return TransferJson.status(r.body()); }
-        @Override public void close() throws Exception { server.close(); sender.close(); http.close(); sink.close(); }
+        @Override public void close() throws Exception { server.close(); handler.close(); sender.close(); http.close(); sink.close(); }
     }
     record Opened(BoundTransfer context, TlsIdentity source, TlsIdentity target) {
         String path() { return "/" + context.request().transferId(); }
@@ -290,6 +291,92 @@ class TransferIntegrationTest extends StorageTestSupport {
             }
             assertEquals(1,closed.get()); assertEquals(0,pair.sourceBudget.used());
         }
+    }
+    @Test void oneBackgroundVerifierRejectsLateWritesAndCancellationWins() throws Exception {
+        var reading=new CountDownLatch(1); var release=new CountDownLatch(1); var cancelling=new CountDownLatch(1);
+        var reads=new java.util.concurrent.atomic.AtomicInteger(); var pool=Executors.newSingleThreadExecutor();
+        try (var pair=new Pair(new FileSink.Io(){
+            public int read(java.nio.channels.FileChannel channel,ByteBuffer bytes,long offset) throws IOException {
+                reads.incrementAndGet(); reading.countDown(); LifecycleStorageTest.await(release); return channel.read(bytes,offset);
+            }
+            public void cancelling() { cancelling.countDown(); }
+        })) {
+            var request=pair.request(); var opened=pair.open(request);
+            assertEquals(200,pair.call(opened.path()+"/chunks/0","PUT","application/lcp-frame",opened.chunk(0,0,(byte)1)).status());
+            var manifest=opened.manifest(new byte[]{1});
+            assertEquals(202,pair.call(opened.path()+"/finish","POST","application/lcp-frame",opened.finish(manifest)).status());
+            LifecycleStorageTest.await(reading);
+            assertEquals(202,pair.call(opened.path()+"/finish","POST","application/lcp-frame",opened.finish(manifest)).status());
+            assertEquals(1,reads.get()); assertEquals(State.VERIFYING,pair.status(request.transferId()).state());
+            error(pair.call(opened.path()+"/chunks/1","PUT","application/lcp-frame",opened.chunk(1,1,(byte)2)),ErrorCode.STATE_CONFLICT);
+            var command=new CancelCommand(request.transferId(),UUID.randomUUID(),opened.context.bindingHash());
+            var cancelled=pool.submit(() -> pair.call(opened.path()+"/cancel","POST","application/json",TransferJson.cancel(command)));
+            LifecycleStorageTest.await(cancelling); assertFalse(cancelled.isDone()); assertTrue(pair.targetBudget.used()>0);
+            release.countDown(); assertEquals(State.CANCELLED,TransferJson.status(cancelled.get(3,TimeUnit.SECONDS).body()).state());
+            assertEquals(State.CANCELLED,pair.status(request.transferId()).state()); assertEquals(0,pair.targetBudget.used());
+        } finally { release.countDown(); pool.shutdownNow(); }
+    }
+    @Test void restartedTargetResumesSavedFinishWithOriginalIdentity() throws Exception {
+        OpenRequest request; FinishManifest manifest; VerifiedResult completed;
+        try (var pair=new Pair()) {
+            request=pair.request(); var opened=pair.open(request);
+            assertEquals(200,pair.call(opened.path()+"/chunks/0","PUT","application/lcp-frame",opened.chunk(0,0,(byte)1)).status());
+            manifest=opened.manifest(new byte[]{1});
+            try (var session=pair.sink.recover(request.transferId())) { session.recordVerifying(manifest); }
+        }
+        try (var restarted=new Pair()) {
+            var pending=restarted.sink.pendingVerification(); assertTrue(pending.isPresent()); restarted.handler.resume(pending.get());
+            long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
+            TransferJson.Status status;
+            do { status=restarted.status(request.transferId()); if (status.state()==State.VERIFYING) Thread.sleep(10); }
+            while (status.state()==State.VERIFYING && System.nanoTime()<deadline);
+            assertEquals(State.COMPLETED,status.state()); assertEquals(manifest.commandId(),status.finish().commandId());
+            completed=status.result(); assertNotNull(completed);
+            assertEquals(completed,restarted.sender.recover(restarted.endpoint,request,null).result());
+        }
+        assertArrayEquals(new byte[]{1},Files.readAllBytes(root.resolve(request.transferId()+"/payload.bin")));
+    }
+    @ParameterizedTest @ValueSource(booleans={false,true})
+    void restartedSourceCancelsOldIntentThenStartsNewIdFromZero(boolean acceptedSaved) throws Exception {
+        try (var pair=new Pair()) {
+            var old=pair.request(); var opened=pair.open(old);
+            assertEquals(200,pair.call(opened.path()+"/chunks/0","PUT","application/lcp-frame",opened.chunk(0,0,(byte)7)).status());
+            var accepted=acceptedSaved ? opened.context.stored() : null;
+            assertNull(pair.sender.recover(pair.endpoint,old,accepted));
+            assertEquals(State.CANCELLED,pair.status(old.transferId()).state());
+            var fresh=pair.request(); assertNotEquals(old.transferId(),fresh.transferId());
+            var result=pair.sender.transfer(pair.endpoint,fresh,new GeneratorSource(17,42));
+            assertEquals(17,result.totalPlainBytes()); assertEquals(1,result.totalChunks());
+            assertEquals(17,Files.size(root.resolve(fresh.transferId()+"/payload.bin")));
+            assertArrayEquals(new byte[]{7},Files.readAllBytes(root.resolve(old.transferId()+"/payload.bin")));
+        }
+    }
+    @Test void senderCloseTimeoutRetainsLeaseUntilCompressionConsumerExits() throws Exception {
+        var compressing=new CountDownLatch(1); var release=new CountDownLatch(1); var closes=new java.util.concurrent.atomic.AtomicInteger();
+        try (var pair=new Pair()) {
+            var codec=new ChunkCompression() {
+                public int code() { return 1; }
+                public long compressBound(long n) { return n+1024; }
+                public long workspaceBytes() { return 0; }
+                public byte[] compress(byte[] bytes,int level) throws IOException { compressing.countDown(); LifecycleStorageTest.await(release); return bytes; }
+                public byte[] decompress(byte[] bytes,int length) { throw new AssertionError(); }
+            };
+            var old=pair.request(); var request=new OpenRequest(old.transferId(),old.routeId(),old.sourceNodeId(),old.targetNodeId(),old.sourceChallenge(),old.sourceKeyId(),old.sourcePublicKeyHash(),old.targetKeyId(),old.targetPublicKeyHash(),List.of(1),old.policy(),old.limits(),old.createdAt(),old.expiresAt());
+            TransferSource input=new TransferSource() {
+                boolean read;
+                public int read(ByteBuffer bytes) { if (read) return -1; read=true; bytes.put((byte)1); return 1; }
+                public void close() { closes.incrementAndGet(); }
+            };
+            var sender=new FixedTransferClient(pair.http,sourceKey,directory,pair.sourceBudget,pair.clock,codec);
+            var result=sender.start(pair.endpoint,request,input).toCompletableFuture();
+            try {
+                LifecycleStorageTest.await(compressing);
+                assertThrows(TransferException.class,() -> sender.close(Duration.ofMillis(30)));
+                assertFalse(result.isDone()); assertTrue(pair.sourceBudget.used()>0); assertEquals(1,closes.get());
+            } finally { release.countDown(); }
+            assertThrows(ExecutionException.class,() -> result.get(3,TimeUnit.SECONDS)); sender.close();
+            assertEquals(0,pair.sourceBudget.used()); assertEquals(1,closes.get());
+        } finally { release.countDown(); }
     }
     private static OpenRequest requestWith(Pair pair, Limits bounds, int chunk, int window) {
         var old = pair.request(); var policy = new Policy(0,1,chunk,chunk,chunk,window,window,window,1,1,1);

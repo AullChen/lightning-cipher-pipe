@@ -22,19 +22,26 @@ public final class FileSink implements TransferSink {
     enum Boundary { PAYLOAD_WRITTEN, PAYLOAD_FORCED, RECEIPT_WRITTEN, RECEIPT_FORCED, INDEX_PUBLISHED }
     interface Io {
         default int write(FileChannel channel, ByteBuffer bytes, long offset) throws IOException { return channel.write(bytes, offset); }
+        default void cancelling() throws IOException {}
         default void after(Boundary boundary) throws IOException {}
+        default int read(FileChannel channel, ByteBuffer bytes, long offset) throws IOException { return channel.read(bytes, offset); }
         default void force(FileChannel channel) throws IOException { channel.force(true); }
     }
     private final Path root;
     private final long metadataBudget;
     private final Io io;
+    private final long graceNanos;
     private final FileChannel lockChannel;
     private final FileLock lock;
     private Session current;
     private boolean closed;
 
     public FileSink(Path root, long metadataBudget) throws IOException { this(root, metadataBudget, new Io() {}); }
-    FileSink(Path root, long metadataBudget, Io io) throws IOException {
+    public FileSink(Path root, long metadataBudget, java.time.Duration shutdownGrace) throws IOException { this(root,metadataBudget,new Io(){},shutdownGrace); }
+    FileSink(Path root, long metadataBudget, Io io) throws IOException { this(root,metadataBudget,io,java.time.Duration.ofSeconds(60)); }
+    FileSink(Path root, long metadataBudget, Io io, java.time.Duration shutdownGrace) throws IOException {
+        graceNanos = shutdownGrace.toNanos();
+        if (graceNanos <= 0) throw new IllegalArgumentException("Invalid shutdown grace");
         if (metadataBudget < SLOT + 4 || metadataBudget > Integer.MAX_VALUE) throw new IllegalArgumentException("Invalid index budget");
         this.metadataBudget = metadataBudget; this.io = Objects.requireNonNull(io);
         this.root = root.toAbsolutePath().normalize();
@@ -144,10 +151,22 @@ public final class FileSink implements TransferSink {
         if (!t.request().transferId().equals(id)) throw new IOException("Transfer directory mismatch");
         capacity(t); current = new Session(dir, t); return current;
     }
+    public synchronized Optional<SinkSession> pendingVerification() throws IOException {
+        ready();
+        try (var paths = Files.newDirectoryStream(root)) {
+            for (Path dir : paths) {
+                if (dir.getFileName().toString().startsWith(".lcp")) continue;
+                var transfer = StorageCodec.open(readSmall(dir.resolve("open.cbor")));
+                var state = StorageCodec.state(readSmall(dir.resolve("state.cbor")),transfer);
+                if (state.state() == State.VERIFYING) return Optional.of(recover(transfer.request().transferId()));
+            }
+        }
+        return Optional.empty();
+    }
     @Override public synchronized void close() throws IOException {
         if (closed) return;
-        try { if (current != null) current.close(); }
-        finally { closed = true; try { lock.release(); } finally { lockChannel.close(); } }
+        if (current != null) current.close();
+        closed = true; try { lock.release(); } finally { lockChannel.close(); }
     }
 
     private final class Session implements SinkSession {
@@ -161,6 +180,8 @@ public final class FileSink implements TransferSink {
         private int count;
         private long total;
         private boolean ended, frozen, closing;
+        private int readers;
+        private CancelCommand cancelling;
         private final List<Receipt> reservations = new ArrayList<>(16);
         private final Object journal = new Object();
         Session(Path dir, AcceptedTransfer transfer) throws IOException {
@@ -206,7 +227,7 @@ public final class FileSink implements TransferSink {
         private void check() throws IOException { if (ended || closing) throw new IOException("Session is closed"); safe(dir, true); }
         private void writable() throws IOException {
             check();
-            if (frozen || !active(saved.state()) || saved.state() == State.VERIFYING) throw new TransferException(STATE_CONFLICT);
+            if (frozen || cancelling != null || !active(saved.state()) || saved.state() == State.VERIFYING) throw new TransferException(STATE_CONFLICT);
         }
         private Receipt receipt(long i) {
             if (i < 0 || i >= limits.maxChunks()) return null;
@@ -304,11 +325,18 @@ public final class FileSink implements TransferSink {
             for (long i = from; i < end; i++) { Receipt r = receipt(i); if (r != null) entries.add(r); }
             return new ReceiptPage(transfer.request().transferId(), from, limit, entries, end < limits.maxChunks() ? end : null, state().revision());
         }
-        @Override public synchronized int readPersisted(long offset, ByteBuffer dst) throws IOException {
-            check(); if (offset < 0) throw new IllegalArgumentException("Negative offset"); return payload.read(dst, offset);
+        @Override public int readPersisted(long offset, ByteBuffer dst) throws IOException {
+            synchronized (this) {
+                check(); if (offset < 0) throw new IllegalArgumentException("Negative offset");
+                if (cancelling != null || frozen) throw new TransferException(STATE_CONFLICT);
+                readers++;
+            }
+            try { return io.read(payload,dst,offset); }
+            finally { synchronized (this) { readers--; notifyAll(); } }
         }
         @Override public synchronized void recordVerifying(FinishManifest f) throws IOException {
-            check(); if (!reservations.isEmpty()) throw new TransferException(BUSY);
+            check(); if (cancelling!=null) throw new TransferException(STATE_CONFLICT);
+            if (!reservations.isEmpty()) throw new TransferException(BUSY);
             if (saved.cancel() != null && saved.cancel().commandId().equals(f.commandId())) throw new TransferException(COMMAND_CONFLICT);
             if (saved.finish() != null) { if (!saved.finish().equals(f)) throw new TransferException(COMMAND_CONFLICT); if (saved.state() == State.VERIFYING || saved.state() == State.COMPLETED) return; }
             writable();
@@ -321,7 +349,7 @@ public final class FileSink implements TransferSink {
         @Override public synchronized void recordCompleted(VerifiedResult result) throws IOException {
             check();
             if (saved.state() == State.COMPLETED && saved.result().equals(result)) return;
-            if (frozen || saved.state() != State.VERIFYING) throw new TransferException(STATE_CONFLICT);
+            if (frozen || cancelling != null || saved.state() != State.VERIFYING) throw new TransferException(STATE_CONFLICT);
             FinishManifest f = saved.finish();
             if (!result.handleId().equals(transfer.response().accepted().handleId()) || result.totalChunks() != f.totalChunks()
                     || result.totalPlainBytes() != f.totalPlainBytes() || !result.root().equals(f.root())
@@ -329,7 +357,7 @@ public final class FileSink implements TransferSink {
             save(State.COMPLETED, f, result, null, null);
         }
         @Override public synchronized void recordFailure(FailureKind kind, ErrorCode code) throws IOException {
-            check(); if (!active(saved.state()) && saved.state() != State.RECOVERY_REQUIRED) throw new TransferException(STATE_CONFLICT);
+            check(); if (cancelling != null || !active(saved.state()) && saved.state() != State.RECOVERY_REQUIRED) throw new TransferException(STATE_CONFLICT);
             failure(State.valueOf(kind.name()), code);
         }
         @Override public synchronized SessionState cancel(CancelCommand command) throws IOException {
@@ -337,17 +365,30 @@ public final class FileSink implements TransferSink {
             if (!command.transferId().equals(transfer.request().transferId()) || !command.bindingHash().equals(transfer.response().bindingHash())) throw new TransferException(INVALID_MESSAGE);
             if (saved.cancel() != null) { if (!saved.cancel().equals(command)) throw new TransferException(COMMAND_CONFLICT); return state(); }
             if (saved.finish() != null && saved.finish().commandId().equals(command.commandId())) throw new TransferException(COMMAND_CONFLICT);
-            if (!reservations.isEmpty()) throw new TransferException(BUSY);
-            writable(); save(State.CANCELLED, null, null, null, command); return state();
+            if (saved.state() == State.COMPLETED) return state();
+            if (cancelling != null) throw new TransferException(cancelling.equals(command) ? BUSY : COMMAND_CONFLICT);
+            if (frozen || !active(saved.state())) throw new TransferException(STATE_CONFLICT);
+            cancelling = command;
+            try { io.cancelling(); drain(); }
+            catch (IOException e) {
+                frozen = true; failure(State.RECOVERY_REQUIRED,UNKNOWN_COMMIT); throw e;
+            }
+            if (frozen || !active(saved.state())) throw new TransferException(UNKNOWN_COMMIT);
+            save(State.CANCELLED, saved.finish(), null, null, command); return state();
+        }
+        private void drain() throws IOException {
+            long start = System.nanoTime();
+            while (!reservations.isEmpty() || readers != 0) {
+                long remaining = graceNanos - (System.nanoTime()-start);
+                if (remaining <= 0) throw new TransferException(UNKNOWN_COMMIT);
+                try { java.util.concurrent.TimeUnit.NANOSECONDS.timedWait(this,remaining); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new TransferException(UNKNOWN_COMMIT); }
+            }
         }
         @Override public void close() throws IOException {
             synchronized (FileSink.this) { synchronized (this) {
                 if (ended) return; closing = true;
-                boolean interrupted = false;
-                while (!reservations.isEmpty()) {
-                    try { wait(); } catch (InterruptedException e) { interrupted = true; }
-                }
-                if (interrupted) Thread.currentThread().interrupt();
+                drain();
                 ended = true;
                 try { log.close(); } finally { payload.close(); if (current == this) current = null; }
             } }

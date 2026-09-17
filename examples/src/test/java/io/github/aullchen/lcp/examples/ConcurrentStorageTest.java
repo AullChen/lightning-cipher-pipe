@@ -41,7 +41,6 @@ class ConcurrentStorageTest extends StorageTestSupport {
                 assertEquals(second, session.receipts(0,2).entries().get(0));
                 var finish = new FinishManifest(transfer.request().transferId(),transfer.response().bindingHash(),UUID.randomUUID(),2,3,block.payloadHash());
                 assertEquals(ErrorCode.BUSY, assertThrows(TransferException.class, () -> session.recordVerifying(finish)).code());
-                assertEquals(ErrorCode.BUSY, assertThrows(TransferException.class, () -> session.cancel(new CancelCommand(finish.transferId(),UUID.randomUUID(),finish.bindingHash()))).code());
             } finally { release.countDown(); }
             var receipt = writer.get(3,TimeUnit.SECONDS);
             assertEquals(receipt,session.commit(block));

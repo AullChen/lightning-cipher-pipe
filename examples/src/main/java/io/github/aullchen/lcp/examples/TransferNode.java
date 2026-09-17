@@ -3,7 +3,7 @@ package io.github.aullchen.lcp.examples;
 import io.github.aullchen.lcp.api.*;
 import io.github.aullchen.lcp.api.Metadata.*;
 import io.github.aullchen.lcp.core.stream.*;
-import io.github.aullchen.lcp.core.protocol.MetadataCodec;
+import io.github.aullchen.lcp.core.protocol.*;
 import io.github.aullchen.lcp.compression.ZstdCompression;
 import io.github.aullchen.lcp.http.*;
 import io.github.aullchen.lcp.security.*;
@@ -25,8 +25,8 @@ public final class TransferNode {
         try (var reader = Files.newBufferedReader(path)) { p.load(reader); }
         Set<String> allowed = new HashSet<>(Set.of("nodeId", "peerNodeId", "tlsKeyStore", "tlsTrustStore", "hpkePrivateKey", "hpkeKeyId",
                 "peerHpkeKeyId", "peerHpkePublicKey", "routeId", "maxFrameBytes", "maxPlainBytes", "maxChunks", "maxTransferBytes", "bufferBudget", "metadataBudget", "inFlightChunks"));
-        allowed.addAll(role.equals("source") ? Set.of("peerUrl", "inputFile", "generatorBytes", "generatorSeed", "chunkBytes", "compression", "zstdLevel", "scheduling")
-                : Set.of("listenHost", "listenPort", "outputRoot"));
+        allowed.addAll(role.equals("source") ? Set.of("peerUrl", "controlRecord", "inputFile", "generatorBytes", "generatorSeed", "chunkBytes", "compression", "zstdLevel", "scheduling")
+                : Set.of("listenHost", "listenPort", "outputRoot", "shutdownGraceMillis", "verificationTimeoutMillis"));
         for (String name : p.stringPropertyNames()) if (!allowed.contains(name)) throw new IllegalArgumentException("Unknown configuration key: " + name);
         return p;
     }
@@ -56,7 +56,8 @@ public final class TransferNode {
         if (window < 1 || window > 16) throw new IllegalArgumentException("Window outside supported range");
         return new Policy(0,1,chunk,chunk,chunk,window,window,window,level,level,level);
     }
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) throws Exception { run(args,new FileSink.Io(){}); }
+    static void run(String[] args, FileSink.Io io) throws Exception {
         if (args.length != 2) throw new IllegalArgumentException("Usage: TransferNode source|target configuration.properties");
         String role = args[0]; Properties p = config(Path.of(args[1]), role);
         String node = required(p,"nodeId"), peer = required(p,"peerNodeId"), route = required(p,"routeId");
@@ -75,9 +76,11 @@ public final class TransferNode {
         var budget = new ByteBudget(number(p,"bufferBudget",134217728)); var codec = new ZstdCompression();
         long metadata = number(p,"metadataBudget",134217728);
         if (limits.maxChunks() > metadata / 52) throw new IllegalArgumentException("Chunk index exceeds metadata budget");
+        Duration grace=Duration.ofMillis(number(p,"shutdownGraceMillis",60000));
         if (role.equals("target")) {
-            try (var sink = new FileSink(Path.of(required(p,"outputRoot")),metadata)) {
-                var handler = new TransferHttpHandler(sink,key,directory,route,node,limits,budget,Clock.systemUTC(),Duration.ofMinutes(10),codec);
+            try (var sink = new FileSink(Path.of(required(p,"outputRoot")),metadata,io,grace);
+                 var handler = new TransferHttpHandler(sink,key,directory,route,node,limits,budget,Clock.systemUTC(),Duration.ofMillis(number(p,"verificationTimeoutMillis",600000)),codec,grace)) {
+                var pending=sink.pendingVerification(); if (pending.isPresent()) handler.resume(pending.get());
                 try (var server = new AuthenticatedHttpServer(new InetSocketAddress(p.getProperty("listenHost","127.0.0.1"),Math.toIntExact(number(p,"listenPort",9443))),tls,node,route,directory,Math.toIntExact(limits.maxInFlightChunks())+1,32,handler)) {
                     CountDownLatch stopped = new CountDownLatch(1);
                     Thread shutdown = new Thread(stopped::countDown,"lcp-stop"); Runtime.getRuntime().addShutdownHook(shutdown);
@@ -93,12 +96,33 @@ public final class TransferNode {
             UUID id = UUID.randomUUID(); var request = new OpenRequest(id,route,node,peer,new Bytes32(challenge),required(p,"hpkeKeyId"),key.publicHash(),required(p,"peerHpkeKeyId"),
                     MetadataCodec.hash(small(Path.of(required(p,"peerHpkePublicKey")))),List.of(code),policy,limits,now,now.plusSeconds(86400));
             URI endpoint = URI.create(required(p,"peerUrl") + TransferHttpHandler.BASE);
-            try (var http = new AuthenticatedHttpClient(tls,Duration.ofSeconds(10),Duration.ofMinutes(11),Math.toIntExact(limits.maxInFlightChunks())+1,32);
-                 var sender = new FixedTransferClient(http,key,directory,budget,Clock.systemUTC(),codec,metadata)) {
+            try (var http = new AuthenticatedHttpClient(tls,Duration.ofSeconds(10),Duration.ofSeconds(60),Math.toIntExact(limits.maxInFlightChunks())+1,32);
+                 var sender = new FixedTransferClient(http,key,directory,budget,Clock.systemUTC(),codec,metadata);
+                 var control = new SourceControl(Path.of(required(p,"controlRecord")))) {
+                var previous=control.read();
+                if (previous!=null) {
+                    if (!previous.endpoint().equals(endpoint.toString()) || !previous.request().sourceNodeId().equals(node)
+                            || !previous.request().targetNodeId().equals(peer) || !previous.request().routeId().equals(route)) throw new IOException("Control record belongs to another route or peer");
+                    var recovered=sender.recover(endpoint,previous.request(),previous.accepted());
+                    if (recovered!=null) {
+                        if (previous.completedStatus().length!=0 && !TransferJson.status(previous.completedStatus()).result().equals(recovered.result())) throw new IOException("Durable completion changed");
+                        control.save(new SourceControlCodec.Record(previous.endpoint(),previous.request(),previous.accepted(),TransferJson.status(recovered)));
+                        System.out.println("COMPLETED handleId="+recovered.result().handleId()+" bytes="+recovered.result().totalPlainBytes()); return;
+                    }
+                }
+                control.save(new SourceControlCodec.Record(endpoint.toString(),request,null,null));
                 TransferSource source = p.containsKey("inputFile") ? new FileSource(Path.of(required(p,"inputFile")))
                         : new GeneratorSource(number(p,"generatorBytes",0),number(p,"generatorSeed",42));
                 System.out.println("transferId=" + id + " configuredWindow=" + limits.maxInFlightChunks());
-                var result = sender.start(endpoint,request,source).toCompletableFuture().get();
+                var result = sender.start(endpoint,request,source,accepted -> {
+                    control.save(new SourceControlCodec.Record(endpoint.toString(),request,accepted,null));
+                    long peak=CompressionPlan.peak(accepted.response().accepted().limits(),CompressionPlan.select(accepted.response().accepted().compressionCode(),codec));
+                    System.out.println("effectiveWindow="+Math.min(accepted.response().accepted().policy().initialWindow(),budget.capacity()/peak));
+                }).toCompletableFuture().get();
+                var completed=http.get(URI.create(endpoint+"/"+id),peer,route,directory,MetadataCodec.CONTROL_LIMIT);
+                var status=TransferJson.status(completed.body());
+                if (completed.status()!=200 || !result.equals(status.result())) throw new IOException("Completion query mismatch");
+                control.save(new SourceControlCodec.Record(endpoint.toString(),request,control.read().accepted(),completed.body()));
                 System.out.println("COMPLETED handleId=" + result.handleId() + " bytes=" + result.totalPlainBytes());
             }
         }
