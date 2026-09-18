@@ -10,6 +10,13 @@ public interface SinkSession extends AutoCloseable {
     SessionState state() throws IOException;
     void recordTransferring() throws IOException;
     Receipt commit(Chunk chunk) throws IOException;
+    /** Optional range admission before commit. Caller closes an unused reservation. */
+    default CommitReservation reserve(Chunk chunk) throws IOException { return null; }
+    interface CommitReservation extends AutoCloseable {
+        boolean repeated();
+        Receipt commit() throws IOException;
+        @Override void close();
+    }
     ReceiptPage receipts(long fromIndex, int limit) throws IOException;
     int readPersisted(long offset, ByteBuffer dst) throws IOException;
     void recordVerifying(FinishManifest manifest) throws IOException;

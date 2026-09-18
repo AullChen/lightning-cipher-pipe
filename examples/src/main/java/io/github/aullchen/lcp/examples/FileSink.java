@@ -271,13 +271,16 @@ public final class FileSink implements TransferSink {
             while (bytes.hasRemaining()) { int n = io.write(channel, bytes, offset); if (n <= 0) throw new IOException("No storage progress"); offset += n; }
         }
         @Override public Receipt commit(Chunk chunk) throws IOException {
+            try (var reservation = reserve(chunk)) { return reservation.commit(); }
+        }
+        @Override public CommitReservation reserve(Chunk chunk) throws IOException {
             Receipt r = new Receipt(transfer.request().transferId(), chunk.index(), chunk.offset(), chunk.plainLength(), chunk.payloadHash());
             var digest = sha256(); digest.update(chunk.bytes());
             if (!new Bytes32(digest.digest()).equals(r.payloadHash())) throw new TransferException(INTEGRITY_MISMATCH);
             synchronized (this) {
                 check();
                 Receipt old = receipt(chunk.index());
-                if (old != null && old.equals(r) && (active(saved.state()) || saved.state() == State.COMPLETED) && !frozen) return old;
+                if (old != null && old.equals(r) && (active(saved.state()) || saved.state() == State.COMPLETED) && !frozen) return reservation(chunk, old, true);
                 if (old != null && saved.state() == State.COMPLETED) throw new TransferException(CHUNK_CONFLICT);
                 writable();
                 if (old != null) throw new TransferException(CHUNK_CONFLICT);
@@ -290,6 +293,24 @@ public final class FileSink implements TransferSink {
                 if (reservations.size() >= limits.maxInFlightChunks()) throw new TransferException(BUSY);
                 recordTransferring(); reservations.add(r);
             }
+            return reservation(chunk, r, false);
+        }
+        private CommitReservation reservation(Chunk chunk, Receipt receipt, boolean repeated) {
+            return new CommitReservation() {
+                private final java.util.concurrent.atomic.AtomicInteger phase = new java.util.concurrent.atomic.AtomicInteger();
+                public boolean repeated() { return repeated; }
+                public Receipt commit() throws IOException {
+                    if (!phase.compareAndSet(0, 1)) throw new IllegalStateException("Reservation consumed");
+                    try { return repeated ? receipt : commitReserved(chunk, receipt); }
+                    finally { phase.set(2); release(); }
+                }
+                private void release() {
+                    if (!repeated) synchronized (Session.this) { reservations.remove(receipt); Session.this.notifyAll(); }
+                }
+                public void close() { if (phase.compareAndSet(0, 2)) release(); }
+            };
+        }
+        private Receipt commitReserved(Chunk chunk, Receipt r) throws IOException {
             try {
                 // Disjoint positional writes run outside the admission monitor.
                 writeAll(payload, chunk.bytes(), chunk.offset()); io.after(Boundary.PAYLOAD_WRITTEN);
@@ -313,8 +334,6 @@ public final class FileSink implements TransferSink {
                     try { failure(State.RECOVERY_REQUIRED, UNKNOWN_COMMIT); } catch (IOException persist) { e.addSuppressed(persist); }
                 }
                 throw new TransferException(UNKNOWN_COMMIT);
-            } finally {
-                synchronized (this) { reservations.remove(r); notifyAll(); }
             }
         }
         @Override public synchronized ReceiptPage receipts(long from, int limit) throws IOException {

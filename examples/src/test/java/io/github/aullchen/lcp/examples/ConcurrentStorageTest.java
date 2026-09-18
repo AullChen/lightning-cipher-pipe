@@ -14,6 +14,23 @@ import static org.junit.jupiter.api.Assertions.*;
 import static io.github.aullchen.lcp.examples.FileSinkTest.*;
 
 class ConcurrentStorageTest extends StorageTestSupport {
+    @Test void unusedReservationReleasesAdmissionAndCannotCommitAfterClose() throws Exception {
+        try (var sink = new FileSink(root,4096)) {
+            var session = sink.open(transfer(1)); var block = chunk(0,0,(byte)1);
+            var reserved = session.reserve(block);
+            assertFalse(reserved.repeated());
+            assertEquals(ErrorCode.BUSY, assertThrows(TransferException.class, () -> session.reserve(block)).code());
+            reserved.close(); reserved.close();
+            assertThrows(IllegalStateException.class, reserved::commit);
+            var receipt = session.commit(block);
+            try (var duplicate = session.reserve(block)) {
+                assertTrue(duplicate.repeated()); assertEquals(receipt, duplicate.commit());
+                assertThrows(IllegalStateException.class, duplicate::commit);
+            }
+            assertEquals(1, session.state().committedChunks());
+        }
+    }
+
     @Test void reservationsRejectDuplicateAndOverlapWhileDisjointWriteCompletes() throws Exception {
         var entered = new CountDownLatch(1); var release = new CountDownLatch(1);
         var first = new java.util.concurrent.atomic.AtomicBoolean(true);

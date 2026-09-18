@@ -96,6 +96,10 @@ class TransferIntegrationTest extends StorageTestSupport {
         try (var pair = new Pair()) {
             OpenRequest request = pair.request();
             VerifiedResult result = pair.sender.start(pair.endpoint, request, new GeneratorSource(length, 42)).toCompletableFuture().get(30, TimeUnit.SECONDS);
+            var measured = pair.sender.metrics();
+            assertEquals(length, measured.confirmedBytes()); assertEquals(length, measured.plainBytes());
+            assertEquals(result.totalChunks(), measured.attempts()); assertEquals(0, measured.retries());
+            assertTrue(measured.samples() <= 64);
             assertEquals(length, result.totalPlainBytes()); assertEquals((length + 262143L) / 262144, result.totalChunks());
             assertEquals(State.COMPLETED, pair.status(request.transferId()).state());
             byte[] actual = Files.readAllBytes(root.resolve(request.transferId() + "/payload.bin"));
@@ -439,9 +443,11 @@ class TransferIntegrationTest extends StorageTestSupport {
         try (var pair = new Pair()) {
             Opened o = pair.open(pair.request()); byte[] frame = o.chunk(0, 0, (byte)7);
             var first = pair.call(o.path() + "/chunks/0", "PUT", "application/lcp-frame", frame); assertEquals(200, first.status());
+            assertNotNull(TransferJson.ack(first.body()).queueMicros());
+            assertNotNull(TransferJson.ack(first.body()).persistMicros());
             long revision = pair.status(o.context.request().transferId()).revision();
             var duplicate = TransferJson.ack(pair.call(o.path() + "/chunks/0", "PUT", "application/lcp-frame", frame).body());
-            assertEquals("ALREADY_APPLIED", duplicate.disposition()); assertNull(duplicate.persistMicros()); assertEquals(revision, pair.status(o.context.request().transferId()).revision());
+            assertEquals("ALREADY_APPLIED", duplicate.disposition()); assertNull(duplicate.persistMicros()); assertNull(duplicate.queueMicros()); assertEquals(revision, pair.status(o.context.request().transferId()).revision());
             var page = pair.call(o.path() + "/receipts?limit=2&from=0", "GET", null, new byte[0]);
             assertEquals(1, TransferJson.page(page.body()).entries().size());
             error(pair.call(o.path() + "/chunks/0", "PUT", "application/lcp-frame", o.chunk(0, 0, (byte)8)), ErrorCode.CHUNK_CONFLICT);

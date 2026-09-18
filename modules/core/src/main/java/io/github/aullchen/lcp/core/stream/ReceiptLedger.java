@@ -14,12 +14,14 @@ public final class ReceiptLedger {
     private final long maxChunks;
     private final ByteBuffer slots;
     private int assigned;
+    private long confirmedBytes;
     public ReceiptLedger(UUID id, long maxChunks, long metadataBudget) {
         if (maxChunks < 1 || maxChunks > Integer.MAX_VALUE / SLOT || maxChunks > metadataBudget / 52)
             throw new IllegalArgumentException("Receipt history exceeds metadata budget");
         this.id = java.util.Objects.requireNonNull(id); this.maxChunks = maxChunks;
         slots = ByteBuffer.allocate(Math.toIntExact(maxChunks * SLOT));
     }
+    public long confirmedBytes() { return confirmedBytes; }
     public long assigned() { return assigned; }
     public void assign(Receipt r) {
         if (!id.equals(r.transferId()) || r.chunkIndex() != assigned || assigned == maxChunks)
@@ -38,6 +40,7 @@ public final class ReceiptLedger {
     }
     public void acknowledge(Receipt r) throws TransferException {
         if (!receipt(r.chunkIndex()).equals(r)) throw new TransferException(UNKNOWN_COMMIT);
+        if (!acknowledged(r.chunkIndex())) confirmedBytes += r.plainLength();
         slots.put((int)r.chunkIndex()*SLOT+48,(byte)1);
     }
     /** Missing historical ACKs or changed descriptors stop recovery; an empty sparse page is not EOF. */

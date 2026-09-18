@@ -27,6 +27,8 @@ public final class FixedTransferClient implements AutoCloseable {
     private final BoundedExecutor worker = new BoundedExecutor(1, 1, "lcp-source");
     private final AtomicBoolean active = new AtomicBoolean();
     private final Object completion = new Object();
+    private volatile TransferMetrics metrics = new TransferMetrics();
+    public TransferMetrics.Snapshot metrics() { return metrics.snapshot(); }
     private volatile boolean closed;
     private volatile TransferSource activeSource;
     public FixedTransferClient(AuthenticatedHttpClient http, HpkeKey key, PeerDirectory directory, ByteBudget budget, Clock clock) {
@@ -72,6 +74,7 @@ public final class FixedTransferClient implements AutoCloseable {
             public void close() throws IOException { if (sourceClosed.compareAndSet(false,true)) original.close(); }
         };
         activeSource=source;
+        metrics = new TransferMetrics();
         boolean chunkerOwnsSource = false;
         try {
             if (closed) throw new TransferException(UNAVAILABLE);
@@ -102,6 +105,7 @@ public final class FixedTransferClient implements AutoCloseable {
             var ledger = new ReceiptLedger(request.transferId(),context.accepted().limits().maxChunks(),metadataBudget);
             FinishManifest finish;
             int window = (int) Math.min(context.accepted().policy().initialWindow(), budget.capacity() / peak);
+            metrics.window(window, window < context.accepted().policy().initialWindow());
             var sends = new BoundedExecutor(window,window,"lcp-chunk");
             try (var chunks = new OrderedChunker(source, Math.toIntExact(context.accepted().policy().initialChunkBytes()),
                     context.accepted().limits(), budget, peak, Duration.ofSeconds(10), window)) {
@@ -112,9 +116,10 @@ public final class FixedTransferClient implements AutoCloseable {
                     try {
                         for (int i = 0; i < window; i++) {
                             var pending = chunks.next();
-                            if (pending == null) { eof = true; break; }
+                            if (pending == null) { eof = true; metrics.sourceEof(); break; }
                             try {
                                 var prepared = new PreparedChunk(pending.chunk(), codec, context.accepted().policy().initialZstdLevel());
+                                metrics.prepared(pending.chunk().plainLength(), prepared.compressedLength(), prepared.compressionNanos());
                                 ledger.assign(prepared.receipt(request.transferId()));
                                 batch.add(new Flight(pending,prepared));
                             } catch (IOException | RuntimeException e) { pending.close(); throw e; }
@@ -128,7 +133,7 @@ public final class FixedTransferClient implements AutoCloseable {
                 return finish(transferUri,context,sourceTls,targetTls,finish,ledger);
             }
         } finally {
-            try { if (!chunkerOwnsSource) source.close(); } finally { activeSource=null; active.set(false); synchronized (completion) { completion.notifyAll(); } }
+            try { if (!chunkerOwnsSource) source.close(); } finally { metrics.finish(); activeSource=null; active.set(false); synchronized (completion) { completion.notifyAll(); } }
         }
     }
     /** Recover facts after source-process loss. Null permits a fresh ID and a new source from offset zero. */
@@ -189,10 +194,26 @@ public final class FixedTransferClient implements AutoCloseable {
                     flight.attempts++;
                     futures.add(sends.submit(() -> {
                         try {
+                            long sealStart = System.nanoTime();
                             byte[] frame = HpkeFrames.sealChunk(context,key,source,target,flight.prepared.aad(id,context.bindingHash()),flight.prepared.compressedBytes());
+                            metrics.sealed(System.nanoTime() - sealStart);
+                            metrics.beginAttempt(flight.attempts > 1);
+                            try {
+                            long sent = System.nanoTime();
                             var response = http.exchange(URI.create(uri + "/chunks/" + flight.prepared.receipt(id).chunkIndex()),"PUT","application/lcp-frame",frame,
                                     context.request().targetNodeId(),context.request().routeId(),directory,MetadataCodec.CONTROL_LIMIT);
+                            context.checkWriter(response.source(),response.target());
+                            try { success(response); }
+                            catch (TransferException e) {
+                                if (e.code() == BUSY) metrics.busy();
+                                return new Outcome(flight,response,null);
+                            }
+                            var ack = TransferJson.ack(response.body());
+                            if (!flight.prepared.receipt(id).equals(ack.receipt())) throw new AuthenticationException();
+                            metrics.acknowledged(System.nanoTime() - sent, ack.queueMicros(), ack.persistMicros(),
+                                    flight.attempts > 1, !"APPLIED".equals(ack.disposition()));
                             return new Outcome(flight,response,null);
+                            } finally { metrics.endAttempt(); }
                         } catch (IOException e) { return new Outcome(flight,null,e); }
                     }));
                 }
@@ -222,6 +243,7 @@ public final class FixedTransferClient implements AutoCloseable {
                 Receipt received = TransferJson.ack(response.body()).receipt();
                 if (!expected.equals(received)) throw new AuthenticationException();
                 ledger.acknowledge(received);
+                metrics.confirmed(ledger.confirmedBytes());
             }
             if (!uncertain) return;
             reconcile(uri,context,ledger);
@@ -269,7 +291,7 @@ public final class FixedTransferClient implements AutoCloseable {
         for (long from = 0; from < ledger.assigned();) {
             int limit = (int)Math.min(256,ledger.assigned()-from);
             var page = TransferJson.page(query(URI.create(uri + "/receipts?from=" + from + "&limit=" + limit),context).body());
-            ledger.reconcile(page,from,limit,revision); revision = page.revision(); from += limit;
+            ledger.reconcile(page,from,limit,revision); metrics.confirmed(ledger.confirmedBytes()); revision = page.revision(); from += limit;
         }
     }
     private VerifiedResult finish(URI uri, BoundTransfer context, TlsIdentity source, TlsIdentity target,

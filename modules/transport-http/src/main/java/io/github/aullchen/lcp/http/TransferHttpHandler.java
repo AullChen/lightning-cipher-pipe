@@ -110,10 +110,14 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
                         var state = session.state();
                         if (state.state() != State.COMPLETED) unexpired(context);
                         boolean repeated = !session.receipts(index, 1).entries().isEmpty();
-                        long start = System.nanoTime();
-                        try {
-                            Receipt r = session.commit(new Chunk(index, aad.offset(), plain.length, MetadataCodec.hash(plain), ByteBuffer.wrap(plain)));
-                            send(x, 200, TransferJson.ack(r, repeated, null, (System.nanoTime() - start) / 1000));
+                        var chunk = new Chunk(index, aad.offset(), plain.length, MetadataCodec.hash(plain), ByteBuffer.wrap(plain));
+                        try (var reservation = session.reserve(chunk)) {
+                            long admitted = System.nanoTime();
+                            long start = System.nanoTime();
+                            Receipt r = reservation == null ? session.commit(chunk) : reservation.commit();
+                            long persist = (System.nanoTime() - start) / 1000;
+                            send(x, 200, TransferJson.ack(r, reservation == null ? repeated : reservation.repeated(),
+                                    reservation == null ? null : (start - admitted) / 1000, persist));
                         } catch (TransferException e) {
                             if (e.code() == CHUNK_CONFLICT && (state.state() == State.OPEN || state.state() == State.TRANSFERRING))
                                 session.recordFailure(FailureKind.FAILED, CHUNK_CONFLICT);
