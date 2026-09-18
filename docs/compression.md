@@ -14,7 +14,7 @@
 
 先准备各节点的 PKCS12 TLS 身份库、信任库、X25519 PKCS8 私钥及对端 SPKI 公钥。身份库中的证书须具备匹配节点的 URI SAN、对应的 clientAuth/serverAuth 用途，服务端 DNS SAN 必须匹配连接主机名。使用各自的 `LCP_KEYSTORE_PASSWORD` 与 `LCP_TRUSTSTORE_PASSWORD` 环境变量提供密码；配置文件不包含密码。
 
-参考配置为 `examples/config/source.properties` 和 `target.properties`。路径相对启动目录，未知键直接拒绝。支持 FileSource 或 GeneratorSource，二者使用同一异步发送入口。当前启动器为 FIXED，两端通过 `inFlightChunks` 配置 1–16 的窗口，输出配置窗口、协商后的实际窗口和 transferId，完成时输出 handleId 与字节数。
+参考配置为 `examples/config/source.properties` 和 `target.properties`。路径相对启动目录，未知键直接拒绝。支持 FileSource 或 GeneratorSource，二者使用同一异步发送入口。启动器支持 FIXED 和 [FEEDBACK](feedback.md)，默认 FIXED；两端通过 `inFlightChunks` 配置 1–16 的窗口，输出配置窗口、协商后的实际窗口和 transferId，完成时输出 handleId 与字节数。
 
 源配置必须指定 `controlRecord`，如 `./run/source-control.cbor`。同一个控制路径只能由一个源进程持有。源重启先查询旧任务：已完成则报告旧结果，未完成则确认取消后以新 ID 重读输入。主动发起另一笔传输应使用新的控制路径；控制文件不是可删除的缓存，未知或损坏的记录不会被覆盖。
 

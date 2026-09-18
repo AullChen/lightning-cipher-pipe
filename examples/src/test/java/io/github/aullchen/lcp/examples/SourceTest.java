@@ -17,6 +17,24 @@ import java.util.concurrent.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SourceTest {
+    @Test void changedChunkSizePreservesOldPendingBytesAndContinuousOffsets() throws Exception {
+        var budget=new ByteBudget(100);
+        var limits=new Limits(10000,32,100,1000,3);
+        try (var chunks=new OrderedChunker(new GeneratorSource(31,42),8,limits,budget,33,Duration.ofSeconds(1),3)) {
+            var first=chunks.next(8); var prepared=new PreparedChunk(first.chunk(),ChunkCompression.NONE,1);
+            byte[] original=prepared.compressedBytes();
+            var second=chunks.next(16); var third=chunks.next(4);
+            assertEquals(8,second.chunk().offset()); assertEquals(16,second.chunk().plainLength());
+            assertEquals(24,third.chunk().offset()); assertEquals(4,third.chunk().plainLength());
+            assertArrayEquals(original,prepared.compressedBytes()); assertEquals(8,first.chunk().plainLength());
+            first.close(); second.close(); third.close();
+            try (var last=chunks.next(16)) { assertEquals(28,last.chunk().offset()); assertEquals(3,last.chunk().plainLength()); }
+            assertTrue(chunks.sourceExhausted()); assertNull(chunks.next(16));
+            assertEquals(31,chunks.finish(UUID.randomUUID(),ZERO,UUID.randomUUID()).totalPlainBytes());
+        }
+        assertEquals(0,budget.used());
+    }
+
     @TempDir Path temp;
     static final Limits LIMITS = new Limits(10000, 1024, 1000, 10000, 1);
     static final Bytes32 ZERO = new Bytes32(new byte[32]);

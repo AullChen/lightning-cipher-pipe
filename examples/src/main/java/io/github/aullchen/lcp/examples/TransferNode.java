@@ -16,7 +16,7 @@ import java.time.*;
 import java.util.*;
 import java.util.concurrent.CountDownLatch;
 
-/** Minimal separate-process FIXED transfer launcher. Secrets are supplied outside configuration. */
+/** Minimal separate-process transfer launcher. Secrets are supplied outside configuration. */
 public final class TransferNode {
     private TransferNode() {}
     static Properties config(Path path, String role) throws IOException {
@@ -25,7 +25,7 @@ public final class TransferNode {
         try (var reader = Files.newBufferedReader(path)) { p.load(reader); }
         Set<String> allowed = new HashSet<>(Set.of("nodeId", "peerNodeId", "tlsKeyStore", "tlsTrustStore", "hpkePrivateKey", "hpkeKeyId",
                 "peerHpkeKeyId", "peerHpkePublicKey", "routeId", "maxFrameBytes", "maxPlainBytes", "maxChunks", "maxTransferBytes", "bufferBudget", "metadataBudget", "inFlightChunks"));
-        allowed.addAll(role.equals("source") ? Set.of("peerUrl", "controlRecord", "inputFile", "generatorBytes", "generatorSeed", "chunkBytes", "compression", "zstdLevel", "scheduling")
+        allowed.addAll(role.equals("source") ? Set.of("peerUrl", "controlRecord", "inputFile", "generatorBytes", "generatorSeed", "chunkBytes", "compression", "zstdLevel", "scheduling", "initialWindow")
                 : Set.of("listenHost", "listenPort", "outputRoot", "shutdownGraceMillis", "verificationTimeoutMillis"));
         for (String name : p.stringPropertyNames()) if (!allowed.contains(name)) throw new IllegalArgumentException("Unknown configuration key: " + name);
         return p;
@@ -45,8 +45,8 @@ public final class TransferNode {
         String value = System.getenv(name); if (value == null || value.isEmpty()) throw new IllegalArgumentException("Set environment variable " + name); return value.toCharArray();
     }
     static Policy policy(Properties p) {
-        if (!p.getProperty("scheduling", "FIXED").equals("FIXED"))
-            throw new IllegalArgumentException("This launcher currently requires FIXED");
+        String scheduling = p.getProperty("scheduling", "FIXED");
+        if (!Set.of("FIXED", "FEEDBACK").contains(scheduling)) throw new IllegalArgumentException("Unknown scheduling mode");
         long chunk = number(p,"chunkBytes",4194304); int level = Math.toIntExact(number(p,"zstdLevel",3));
         if (chunk < 262144 || chunk > 8388608) throw new IllegalArgumentException("Chunk size outside supported range");
         String compression = p.getProperty("compression","ZSTD");
@@ -54,7 +54,14 @@ public final class TransferNode {
         if (compression.equals("NONE")) level = 1;
         int window = Math.toIntExact(number(p,"inFlightChunks",1));
         if (window < 1 || window > 16) throw new IllegalArgumentException("Window outside supported range");
-        return new Policy(0,1,chunk,chunk,chunk,window,window,window,level,level,level);
+        if (scheduling.equals("FIXED")) {
+            if (p.containsKey("initialWindow")) throw new IllegalArgumentException("initialWindow requires FEEDBACK");
+            return new Policy(0,1,chunk,chunk,chunk,window,window,window,level,level,level);
+        }
+        long maxChunk = Math.min(8388608, number(p,"maxPlainBytes",8388608));
+        if (maxChunk < 262144) throw new IllegalArgumentException("Feedback requires at least 256 KiB chunks");
+        return new Policy(1,1,262144,maxChunk,chunk,1,window,number(p,"initialWindow",window),
+                1,compression.equals("NONE") ? 1 : 5,level);
     }
     public static void main(String[] args) throws Exception { run(args,new FileSink.Io(){}); }
     static void run(String[] args, FileSink.Io io) throws Exception {

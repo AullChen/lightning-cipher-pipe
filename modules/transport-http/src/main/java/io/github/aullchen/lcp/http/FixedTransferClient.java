@@ -14,7 +14,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import static io.github.aullchen.lcp.api.TransferStorage.ErrorCode.*;
 
-/** Bounded-window fixed-policy sender. Uncertain writes are reconciled before bounded retries. */
+/** Bounded-window FIXED/FEEDBACK sender. Uncertain writes are reconciled before bounded retries. */
 public final class FixedTransferClient implements AutoCloseable {
     private final AuthenticatedHttpClient http;
     private final HpkeKey key;
@@ -79,8 +79,8 @@ public final class FixedTransferClient implements AutoCloseable {
         try {
             if (closed) throw new TransferException(UNAVAILABLE);
             if (!"https".equalsIgnoreCase(endpoint.getScheme()) || endpoint.getRawQuery() != null || endpoint.getRawFragment() != null
-                    || !TransferHttpHandler.BASE.equals(endpoint.getRawPath()) || request.policy().mode() != 0)
-                throw new IllegalArgumentException("Expected fixed transfer HTTPS endpoint");
+                    || !TransferHttpHandler.BASE.equals(endpoint.getRawPath()))
+                throw new IllegalArgumentException("Expected transfer HTTPS endpoint");
             if (request.limits().maxChunks() > metadataBudget / 52 || request.limits().maxChunks() > Integer.MAX_VALUE / 49)
                 throw new IllegalArgumentException("Receipt history exceeds metadata budget");
             for (int offer : request.compressionOffers()) {
@@ -104,28 +104,37 @@ public final class FixedTransferClient implements AutoCloseable {
             URI transferUri = URI.create(endpoint.toString() + "/" + request.transferId());
             var ledger = new ReceiptLedger(request.transferId(),context.accepted().limits().maxChunks(),metadataBudget);
             FinishManifest finish;
-            int window = (int) Math.min(context.accepted().policy().initialWindow(), budget.capacity() / peak);
-            metrics.window(window, window < context.accepted().policy().initialWindow());
-            var sends = new BoundedExecutor(window,window,"lcp-chunk");
+            Policy policy = context.accepted().policy();
+            var controller = policy.mode() == 1 ? new FeedbackController(policy) : null;
+            int capacity = (int)Math.min(policy.maxWindow(), budget.capacity() / peak);
+            var sends = new BoundedExecutor(capacity,capacity,"lcp-chunk");
             try (var chunks = new OrderedChunker(source, Math.toIntExact(context.accepted().policy().initialChunkBytes()),
-                    context.accepted().limits(), budget, peak, Duration.ofSeconds(10), window)) {
+                    context.accepted().limits(), budget, peak, Duration.ofSeconds(10), capacity)) {
                 chunkerOwnsSource = true;
                 boolean eof = false;
                 while (!eof) {
+                    var parameters = controller == null ? new FeedbackController.Parameters((int)policy.initialChunkBytes(),
+                            (int)policy.initialWindow(),policy.initialZstdLevel()) : controller.parameters();
+                    int window = Math.min(parameters.window(),capacity);
+                    metrics.window(window, window < parameters.window());
                     var batch = new java.util.ArrayList<Flight>(window);
                     try {
                         for (int i = 0; i < window; i++) {
-                            var pending = chunks.next();
+                            OrderedChunker.Pending pending;
+                            try { pending = chunks.next(parameters.chunkBytes()); }
+                            catch (IllegalStateException e) { metrics.budgetFailure(); throw e; }
                             if (pending == null) { eof = true; metrics.sourceEof(); break; }
                             try {
-                                var prepared = new PreparedChunk(pending.chunk(), codec, context.accepted().policy().initialZstdLevel());
+                                var prepared = new PreparedChunk(pending.chunk(), codec, parameters.zstdLevel());
                                 metrics.prepared(pending.chunk().plainLength(), prepared.compressedLength(), prepared.compressionNanos());
                                 ledger.assign(prepared.receipt(request.transferId()));
                                 batch.add(new Flight(pending,prepared));
                             } catch (IOException | RuntimeException e) { pending.close(); throw e; }
                         }
-                        settle(sends,batch,ledger,context,sourceTls,targetTls,transferUri);
+                        settle(sends,batch,ledger,context,sourceTls,targetTls,transferUri,controller);
                     } finally { for (var flight : batch) flight.pending.close(); }
+                    if (chunks.sourceExhausted()) metrics.sourceEof();
+                    if (controller != null) controller.observe(metrics.pollRound());
                 }
                 finish = chunks.finish(request.transferId(), context.bindingHash(), UUID.randomUUID());
             } finally { sends.shutdown(); }
@@ -182,10 +191,15 @@ public final class FixedTransferClient implements AutoCloseable {
         if (!context.accepted().expiresAt().isAfter(clock.instant())) throw new TransferException(EXPIRED);
     }
     private void settle(ExecutorService sends, java.util.List<Flight> batch, ReceiptLedger ledger, BoundTransfer context,
-                        TlsIdentity source, TlsIdentity target, URI uri) throws IOException, InterruptedException {
+                        TlsIdentity source, TlsIdentity target, URI uri, FeedbackController controller) throws IOException, InterruptedException {
         UUID id = context.accepted().transferId();
         while (batch.stream().anyMatch(f -> !ledger.acknowledged(f.prepared.receipt(id).chunkIndex()))) {
             live(context);
+            int requestedWindow = controller == null ? (int)context.accepted().policy().initialWindow() : controller.parameters().window();
+            int effectiveWindow = (int)Math.min(requestedWindow, budget.capacity() / CompressionPlan.peak(context.accepted().limits(),
+                    CompressionPlan.select(context.accepted().compressionCode(),optionalCodec)));
+            metrics.window(effectiveWindow, effectiveWindow < requestedWindow);
+            var admission = new Semaphore(effectiveWindow);
             var futures = new java.util.ArrayList<Future<Outcome>>(batch.size());
             var outcomes = new java.util.ArrayList<Outcome>(batch.size());
             try {
@@ -193,6 +207,7 @@ public final class FixedTransferClient implements AutoCloseable {
                     if (ledger.acknowledged(flight.prepared.receipt(id).chunkIndex())) continue;
                     flight.attempts++;
                     futures.add(sends.submit(() -> {
+                        admission.acquire();
                         try {
                             long sealStart = System.nanoTime();
                             byte[] frame = HpkeFrames.sealChunk(context,key,source,target,flight.prepared.aad(id,context.bindingHash()),flight.prepared.compressedBytes());
@@ -215,6 +230,7 @@ public final class FixedTransferClient implements AutoCloseable {
                             return new Outcome(flight,response,null);
                             } finally { metrics.endAttempt(); }
                         } catch (IOException e) { return new Outcome(flight,null,e); }
+                        finally { admission.release(); }
                     }));
                 }
                 for (var future : futures) {
@@ -231,20 +247,21 @@ public final class FixedTransferClient implements AutoCloseable {
                 }
                 if (interrupted) Thread.currentThread().interrupt();
             }
-            boolean uncertain = false; long retryAfter = 0; int attempts = 0;
+            boolean uncertain = false, pressure = false; long retryAfter = 0; int attempts = 0;
             for (var outcome : outcomes) {
                 attempts = Math.max(attempts,outcome.flight.attempts);
                 if (outcome.failure != null) { retryable(outcome.failure); uncertain = true; continue; }
                 var response = outcome.response;
                 context.checkWriter(response.source(),response.target());
                 try { success(response); }
-                catch (IOException e) { retryable(e); uncertain = true; retryAfter = Math.max(retryAfter,response.retryAfterMillis()); continue; }
+                catch (IOException e) { retryable(e); pressure |= e instanceof TransferException t && t.code() == BUSY; uncertain = true; retryAfter = Math.max(retryAfter,response.retryAfterMillis()); continue; }
                 Receipt expected = outcome.flight.prepared.receipt(id);
                 Receipt received = TransferJson.ack(response.body()).receipt();
                 if (!expected.equals(received)) throw new AuthenticationException();
                 ledger.acknowledge(received);
                 metrics.confirmed(ledger.confirmedBytes());
             }
+            if (pressure && controller != null) { controller.pressure(); metrics.restartRound(); }
             if (!uncertain) return;
             reconcile(uri,context,ledger);
             boolean unresolved = batch.stream().anyMatch(f -> !ledger.acknowledged(f.prepared.receipt(id).chunkIndex()));

@@ -48,7 +48,11 @@ public final class OrderedChunker implements AutoCloseable {
     }
 
     /** Returns null only at EOF. Release each Pending only after all its consumers finish. */
-    public Pending next() throws IOException {
+    public Pending next() throws IOException { return next(chunkBytes); }
+    /** Size applies only to this new descriptor; existing pending bytes remain immutable. */
+    public Pending next(int nextChunkBytes) throws IOException {
+        if (nextChunkBytes < 1 || nextChunkBytes > limits.maxPlainBytes() || nextChunkBytes > 8388608
+                || peakBytes < (long)nextChunkBytes + 1) throw new IllegalArgumentException("Invalid next chunk size");
         if (closed || failed) throw new IOException("Source is closed or failed");
         if (outstanding.get() >= window) throw new IllegalStateException("Previous chunk still owns its lease");
         if (eof) return null;
@@ -59,7 +63,7 @@ public final class OrderedChunker implements AutoCloseable {
                 if (readProgress(ByteBuffer.allocate(1)) != -1) throw new IOException("Transfer quota exceeded");
                 eof = true; lease.close(); return null;
             }
-            ByteBuffer buffer = ByteBuffer.allocate((int) Math.min(chunkBytes, remaining));
+            ByteBuffer buffer = ByteBuffer.allocate((int) Math.min(nextChunkBytes, remaining));
             while (buffer.hasRemaining()) {
                 if (readProgress(buffer) == -1) { eof = true; break; }
             }
@@ -88,6 +92,8 @@ public final class OrderedChunker implements AutoCloseable {
             LockSupport.parkNanos(Math.min(1_000_000, idleNanos));
         }
     }
+
+    public boolean sourceExhausted() { return eof; }
 
     public FinishManifest finish(UUID transferId, Bytes32 bindingHash, UUID commandId) {
         if (!eof || outstanding.get() != 0 || failed || closed) throw new IllegalStateException("Stream not drained");

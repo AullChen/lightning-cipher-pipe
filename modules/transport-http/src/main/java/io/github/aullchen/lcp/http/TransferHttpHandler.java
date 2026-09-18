@@ -219,7 +219,6 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
         }
         if (!r.expiresAt().isAfter(clock.instant())) throw new TransferException(EXPIRED);
         Policy p = r.policy();
-        if (p.mode() != 0) throw new TransferException(INVALID_MESSAGE);
         int compressionCode = r.compressionOffers().stream().filter(c -> c == 0 || c == optionalCodec.code()).findFirst()
                 .orElseThrow(() -> new TransferException(INVALID_MESSAGE));
         ChunkCompression codec = CompressionPlan.select(compressionCode, optionalCodec);
@@ -228,7 +227,7 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
                 Math.min(limits.maxChunks(), offered.maxChunks()), Math.min(limits.maxTransferBytes(), offered.maxTransferBytes()), Math.min(limits.maxInFlightChunks(), offered.maxInFlightChunks()));
         try { CompressionPlan.validate(p, acceptedLimits, codec, budget.capacity()); }
         catch (IllegalArgumentException e) { throw new TransferException(LIMIT_EXCEEDED); }
-        Policy acceptedPolicy = new Policy(0, 1, p.minChunkBytes(), p.maxChunkBytes(), p.initialChunkBytes(), p.minWindow(), p.maxWindow(), p.initialWindow(), compressionCode == 0 ? 1 : p.minZstdLevel(), compressionCode == 0 ? 1 : p.maxZstdLevel(), compressionCode == 0 ? 1 : p.initialZstdLevel());
+        Policy acceptedPolicy = new Policy(p.mode(), 1, p.minChunkBytes(), p.maxChunkBytes(), p.initialChunkBytes(), p.minWindow(), p.maxWindow(), p.initialWindow(), compressionCode == 0 ? 1 : p.minZstdLevel(), compressionCode == 0 ? 1 : p.maxZstdLevel(), compressionCode == 0 ? 1 : p.initialZstdLevel());
         byte[] challenge = new byte[32]; new SecureRandom().nextBytes(challenge);
         Accepted a = new Accepted(r.transferId(), new Bytes32(challenge), UUID.randomUUID().toString(), compressionCode, acceptedPolicy, acceptedLimits, r.expiresAt());
         if (!key.publicHash().equals(r.targetPublicKeyHash())) throw new AuthenticationException();

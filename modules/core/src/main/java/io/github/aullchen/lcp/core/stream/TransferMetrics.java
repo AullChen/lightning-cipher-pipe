@@ -17,7 +17,7 @@ public final class TransferMetrics {
     private final double[] queue = new double[SAMPLE_CAPACITY];
     private long confirmed, roundConfirmed, plain, compressed, compressionNanos, sealNanos;
     private long attempts, retries, busy, budgetFailures, roundRetries, roundBusy, roundBudget;
-    private long totalPlain, totalCompressed, totalCompression;
+    private long totalPlain, totalCompressed, totalCompression, totalFullNanos, totalBudgetNanos;
     public TransferMetrics() { this(System::nanoTime); }
     public TransferMetrics(LongSupplier clock) {
         this.clock = java.util.Objects.requireNonNull(clock);
@@ -26,8 +26,8 @@ public final class TransferMetrics {
     private long tick() {
         long now = stopped == null ? clock.getAsLong() : stopped, delta = now - changed;
         if (delta < 0) throw new IllegalStateException("Monotonic clock moved backwards");
-        if (inFlight >= window) fullNanos += delta;
-        if (blocked) budgetNanos += delta;
+        if (inFlight >= window) { fullNanos += delta; totalFullNanos += delta; }
+        if (blocked) { budgetNanos += delta; totalBudgetNanos += delta; }
         changed = now; return now;
     }
     public synchronized void window(int value, boolean budgetBlocked) {
@@ -73,10 +73,10 @@ public final class TransferMetrics {
     }
     public record Snapshot(long elapsedNanos, long confirmedBytes, long attempts, long retries, long busy,
                            long budgetFailures, long plainBytes, long compressedBytes, long compressionNanos,
-                           long sealNanos, int samples, Long ackP95Nanos, Double queueShare) {}
+                           long sealNanos, long windowFullNanos, long budgetBlockedNanos, int samples, Long ackP95Nanos, Double queueShare) {}
     public synchronized Snapshot snapshot() {
         return new Snapshot(tick() - started, confirmed, attempts, retries, busy, budgetFailures,
-                totalPlain, totalCompressed, totalCompression, sealNanos, size, p95(), queueMedian());
+                totalPlain, totalCompressed, totalCompression, sealNanos, totalFullNanos, totalBudgetNanos, size, p95(), queueMedian());
     }
     public record Round(long elapsedNanos, long confirmedBytes, int validSamples, Long ackP95Nanos, Double queueShare,
                         double compressionBusy, Double wireRatio, double windowFullShare, boolean sourceEof,
@@ -90,8 +90,12 @@ public final class TransferMetrics {
         Round result = new Round(elapsed, roundConfirmed, valid, p95(), queueMedian(),
                 Math.min(1, compressionNanos / (double)elapsed), plain == 0 ? null : compressed / (double)plain,
                 fullNanos / (double)elapsed, eof, budgetNanos > 0 || blocked, roundRetries, roundBusy, roundBudget);
-        roundStarted = now; roundConfirmed = plain = compressed = compressionNanos = fullNanos = budgetNanos = 0;
-        roundRetries = roundBusy = roundBudget = 0; valid = 0;
+        restartRound();
         return result;
+    }
+    /** Pressure invalidates a partial trial round; cumulative progress remains unchanged. */
+    public synchronized void restartRound() {
+        roundStarted = tick(); roundConfirmed = plain = compressed = compressionNanos = fullNanos = budgetNanos = 0;
+        roundRetries = roundBusy = roundBudget = 0; valid = 0;
     }
 }
