@@ -3,6 +3,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>io.github.aullchen</groupId><artifactId>lightning-cipher-pipe</artifactId><version>0.1.0-SNAPSHOT</version><packaging>pom</packaging>
   <modules><module>modules/api</module><module>modules/core</module><module>modules/security</module><module>modules/compression-zstd</module><module>modules/transport-http</module><module>examples</module></modules>
+  <profiles><profile><id>benchmarks</id><modules><module>benchmarks</module></modules></profile></profiles>
   <properties>
     <maven.compiler.release>17</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>

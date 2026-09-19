@@ -33,6 +33,10 @@ class TransferMetricsTest {
         time.set(1_500_000_000); metrics.endAttempt();
         metrics.prepared(100,50,1_000_000_000); metrics.confirmed(100); metrics.confirmed(100);
         metrics.busy(); metrics.budgetFailure();
+        metrics.sent(120,false); metrics.sent(120,true);
+        metrics.decision(true,false,7); metrics.decision(false,true,9);
+        assertEquals(240,metrics.snapshot().sentFrameBytes()); assertEquals(120,metrics.snapshot().retriedFrameBytes());
+        assertEquals(1,metrics.snapshot().rollbacks()); assertEquals(16,metrics.snapshot().decisionNanos());
         for (int i=0;i<16;i++) metrics.acknowledged(10000,1L,2L,false,false);
         assertNull(metrics.pollRound()); time.set(2_000_000_000);
         var round=metrics.pollRound();

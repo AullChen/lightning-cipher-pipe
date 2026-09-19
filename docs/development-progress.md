@@ -17,11 +17,12 @@
 | C11 | 完成 | 持久阶段计时、64 条有界 ACK 样本、去重进度与单调时钟轮次 |
 | C12 | 完成 | 单维轮换试探、压力降窗、两轮评估回退与冷却、FEEDBACK 发送 |
 | F03 | 完成 | EOF 结束预算阻塞积分，末批排空不重新开启；完成耗时仍含 Finish 验证 |
-| C13 | 待实现 | 基线与性能实验 |
+| C13 | 完成 | 独立 benchmark profile、五策略、训练选参、可控 TLS 链路、SHA-256/RSS/结果导出 |
+| C14 | 待实现 | 多次重复实测与研究结论 |
 
 ## 验证范围
 
-`mvnw clean verify` 执行编译与快速测试；Windows 使用 `mvnw.cmd`。全工程包含 302 项测试，其中 17 项压缩测试、49 项真实 TLS 传输集成测试，并覆盖配置启动的双 JVM 传输。
+`mvnw clean verify` 执行编译与快速测试；Windows 使用 `mvnw.cmd`。全工程包含 302 项测试，其中 17 项压缩测试、49 项真实 TLS 传输集成测试，并覆盖配置启动的双 JVM 传输。`-Pbenchmarks verify` 另运行代理字节流回归；性能矩阵通过独立 Python 入口执行，不进入快速门禁。
 
 - V01–V03：规范编码、长度与配额、独立 Merkle 根、api/core 依赖边界。
 - V04–V05：标准 HPKE Auth 向量、AAD/frame 篡改、实际 TLS 身份/SPKI、路由与密钥校验。

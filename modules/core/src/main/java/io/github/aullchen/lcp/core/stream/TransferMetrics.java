@@ -17,6 +17,14 @@ public final class TransferMetrics {
     private final double[] queue = new double[SAMPLE_CAPACITY];
     private long confirmed, roundConfirmed, plain, compressed, compressionNanos, sealNanos;
     private long attempts, retries, busy, budgetFailures, roundRetries, roundBusy, roundBudget;
+    private long sentFrameBytes, retriedFrameBytes, decisions, trials, rollbacks, decisionNanos;
+    public synchronized void sent(long bytes, boolean retry) {
+        if (bytes < 0) throw new IllegalArgumentException("Negative sent bytes");
+        sentFrameBytes += bytes; if (retry) retriedFrameBytes += bytes;
+    }
+    public synchronized void decision(boolean startedTrial, boolean rolledBack, long nanos) {
+        decisions++; if (startedTrial) trials++; if (rolledBack) rollbacks++; decisionNanos += nanos;
+    }
     private long totalPlain, totalCompressed, totalCompression, totalFullNanos, totalBudgetNanos;
     public TransferMetrics() { this(System::nanoTime); }
     public TransferMetrics(LongSupplier clock) {
@@ -73,10 +81,10 @@ public final class TransferMetrics {
     }
     public record Snapshot(long elapsedNanos, long confirmedBytes, long attempts, long retries, long busy,
                            long budgetFailures, long plainBytes, long compressedBytes, long compressionNanos,
-                           long sealNanos, long windowFullNanos, long budgetBlockedNanos, int samples, Long ackP95Nanos, Double queueShare) {}
+                           long sealNanos, long windowFullNanos, long budgetBlockedNanos, int samples, Long ackP95Nanos, Double queueShare, long sentFrameBytes, long retriedFrameBytes, long decisions, long trials, long rollbacks, long decisionNanos) {}
     public synchronized Snapshot snapshot() {
         return new Snapshot(tick() - started, confirmed, attempts, retries, busy, budgetFailures,
-                totalPlain, totalCompressed, totalCompression, sealNanos, totalFullNanos, totalBudgetNanos, size, p95(), queueMedian());
+                totalPlain, totalCompressed, totalCompression, sealNanos, totalFullNanos, totalBudgetNanos, size, p95(), queueMedian(), sentFrameBytes, retriedFrameBytes, decisions, trials, rollbacks, decisionNanos);
     }
     public record Round(long elapsedNanos, long confirmedBytes, int validSamples, Long ackP95Nanos, Double queueShare,
                         double compressionBusy, Double wireRatio, double windowFullShare, boolean sourceEof,

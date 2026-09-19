@@ -7,3 +7,6 @@
 /secrets/
 /output/
 /run/
+
+/benchmarks/results/
+**/__pycache__/

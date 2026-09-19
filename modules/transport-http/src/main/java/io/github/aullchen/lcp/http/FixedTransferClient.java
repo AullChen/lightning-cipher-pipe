@@ -134,7 +134,10 @@ public final class FixedTransferClient implements AutoCloseable {
                         settle(sends,batch,ledger,context,sourceTls,targetTls,transferUri,controller);
                     } finally { for (var flight : batch) flight.pending.close(); }
                     if (chunks.sourceExhausted()) metrics.sourceEof();
-                    if (controller != null) controller.observe(metrics.pollRound());
+                    if (controller != null) {
+                        var round = metrics.pollRound();
+                        if (round != null) decide(controller,round,false);
+                    }
                 }
                 finish = chunks.finish(request.transferId(), context.bindingHash(), UUID.randomUUID());
             } finally { sends.shutdown(); }
@@ -214,6 +217,7 @@ public final class FixedTransferClient implements AutoCloseable {
                             metrics.sealed(System.nanoTime() - sealStart);
                             metrics.beginAttempt(flight.attempts > 1);
                             try {
+                            metrics.sent(frame.length,flight.attempts > 1);
                             long sent = System.nanoTime();
                             var response = http.exchange(URI.create(uri + "/chunks/" + flight.prepared.receipt(id).chunkIndex()),"PUT","application/lcp-frame",frame,
                                     context.request().targetNodeId(),context.request().routeId(),directory,MetadataCodec.CONTROL_LIMIT);
@@ -261,7 +265,7 @@ public final class FixedTransferClient implements AutoCloseable {
                 ledger.acknowledge(received);
                 metrics.confirmed(ledger.confirmedBytes());
             }
-            if (pressure && controller != null) { controller.pressure(); metrics.restartRound(); }
+            if (pressure && controller != null) { decide(controller,null,true); metrics.restartRound(); }
             if (!uncertain) return;
             reconcile(uri,context,ledger);
             boolean unresolved = batch.stream().anyMatch(f -> !ledger.acknowledged(f.prepared.receipt(id).chunkIndex()));
@@ -278,6 +282,12 @@ public final class FixedTransferClient implements AutoCloseable {
             }
             retries.pause(attempts,context.accepted().expiresAt(),retryAfter);
         }
+    }
+    private void decide(FeedbackController controller, TransferMetrics.Round round, boolean pressure) {
+        boolean trial = controller.trialActive(); var old = controller.parameters(); long start = System.nanoTime();
+        if (pressure) controller.pressure(); else controller.observe(round);
+        metrics.decision(!trial && controller.trialActive(), trial && !controller.trialActive()
+                && (pressure || !old.equals(controller.parameters())), System.nanoTime()-start);
     }
     private static void retryable(IOException failure) throws IOException {
         if (failure instanceof TransferException transfer && transfer.code() != BUSY && transfer.code() != UNAVAILABLE) throw failure;
