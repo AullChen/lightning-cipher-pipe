@@ -5,6 +5,15 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.junit.jupiter.api.Assertions.*;
 
 class TransferMetricsTest {
+    @Test void eofStopsBudgetBlockingButCompletionTimeIncludesVerification() {
+        var time = new AtomicLong(); var metrics = new TransferMetrics(time::get);
+        metrics.window(1, true); time.set(100); metrics.sourceEof();
+        time.set(200); metrics.window(1, true); // draining the final batch must not reopen source admission
+        time.set(1000); metrics.finish(); time.set(2000);
+        assertEquals(100, metrics.snapshot().budgetBlockedNanos());
+        assertEquals(1000, metrics.snapshot().elapsedNanos());
+    }
+
     @Test void boundedSamplesAndMissingTiming() {
         var time = new AtomicLong(); var metrics = new TransferMetrics(time::get);
         assertNull(metrics.snapshot().ackP95Nanos());

@@ -32,9 +32,9 @@ public final class TransferMetrics {
     }
     public synchronized void window(int value, boolean budgetBlocked) {
         if (value < 1 || value > 16) throw new IllegalArgumentException("Invalid window");
-        tick(); window = value; blocked = budgetBlocked;
+        tick(); window = value; blocked = budgetBlocked && !eof;
     }
-    public synchronized void sourceEof() { eof = true; }
+    public synchronized void sourceEof() { tick(); eof = true; blocked = false; }
     public synchronized void beginAttempt(boolean retry) {
         tick(); inFlight++; attempts++; if (retry) { retries++; roundRetries++; }
     }
