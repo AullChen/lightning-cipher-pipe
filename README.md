@@ -1,6 +1,6 @@
 # LightningCipherPipe
 
-轻量化、数据库无关的 Java 17 安全数据交换中间件。已实现 FIXED/FEEDBACK 策略、NONE/ZSTD 编码的认证传输闭环：持久接纳 Open、加密块传输、持久 receipt，以及 Finish 后的输出重读验证。反馈策略在资源预算内试探分块大小、并发窗口与压缩等级，支持回退与冷却；尚无性能收益结论。
+轻量化、数据库无关的 Java 17 安全数据交换中间件。已实现 FIXED/FEEDBACK 策略、NONE/ZSTD 编码的认证传输闭环：持久接纳 Open、加密块传输、持久 receipt，以及 Finish 后的输出重读验证。反馈策略在资源预算内试探分块大小、并发窗口与压缩等级，支持回退与冷却；受控实验未确认相对训练固定基线的预定性能收益。
 
 ## 构建
 
@@ -26,6 +26,6 @@ Windows 对应使用 `mvnw.cmd`。首次运行需要下载固定版本的 Maven 
 
 自动化测试覆盖独立[协议向量](protocol/vectors/README.md)、持久化故障、跨进程锁及空流、1 字节、跨块的真实 TLS 传输。帧认证成功不等于传输完成：目标必须重读持久输出，通过摘要、Merkle 根和长度校验后才能发布 COMPLETED。
 
-当前支持单任务、1–16 的有界窗口和 NONE/ZSTD。已支持 ACK 丢失后的分页对账与有界重试；已支持源控制记录、目标重启、VERIFYING 恢复和取消竞争处理。已支持有界指标与反馈调度；性能实验尚未完成。
+当前支持单任务、1–16 的有界窗口和 NONE/ZSTD。已支持 ACK 丢失后的分页对账与有界重试；已支持源控制记录、目标重启、VERIFYING 恢复和取消竞争处理。已支持有界指标与反馈调度；已完成五策略受控实验，结果与限制见[实验报告](docs/experiments/feedback-v1/README.md)。
 
 参见[压缩与启动示例](docs/compression.md)、[传输接口](docs/transfer.md)、[反馈策略](docs/feedback.md)、[传输观测](docs/metrics.md)、[文件持久化](docs/storage.md)、[实现状态](docs/development-progress.md)、[构建与依赖](docs/build-baseline.md)及[认证边界](docs/security.md)。

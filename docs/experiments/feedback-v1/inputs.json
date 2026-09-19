@@ -1,0 +1,93 @@
+{
+  "generator": "CPython-random-MT19937-randbytes-v1",
+  "python": "3.10.6",
+  "longMiB": 512,
+  "files": {
+    "train-text-short.bin": {
+      "bytes": 1048576,
+      "sha256": "946f46455a3ef37c390048222d40f6d4adc32bd994d0dfbedd7e8f635200f5f9",
+      "seed": 773
+    },
+    "train-text-long.bin": {
+      "bytes": 134217728,
+      "sha256": "ee97a6587d095e2dcab182407eba234a8fc017a2969bfddd219cdcad5946171a",
+      "seed": 773
+    },
+    "train-mixed-short.bin": {
+      "bytes": 1048576,
+      "sha256": "f83641c5cb56d7f90ecafa57b65f916f6bcf879c00ed2517ea3c5a16407a5b04",
+      "seed": 773
+    },
+    "train-mixed-long.bin": {
+      "bytes": 134217728,
+      "sha256": "d83711855d679150697db7928fa69a112d62b5924f134607ab5e348eed9cd578",
+      "seed": 773
+    },
+    "train-entropy-short.bin": {
+      "bytes": 1048576,
+      "sha256": "ff11ba76121cccdcb0ad03fc73bef58486ddc61713c137fbb6f4816a3b14a366",
+      "seed": 773
+    },
+    "train-entropy-long.bin": {
+      "bytes": 134217728,
+      "sha256": "a4dd3d230c97408a1477bd23cb35df2ca9f43ad36a2c22c19c69d86162194005",
+      "seed": 773
+    },
+    "eval-text-short.bin": {
+      "bytes": 1048576,
+      "sha256": "946f46455a3ef37c390048222d40f6d4adc32bd994d0dfbedd7e8f635200f5f9",
+      "seed": 991
+    },
+    "eval-text-long.bin": {
+      "bytes": 536870912,
+      "sha256": "54e1035c0e1e6bca513e881a725179595314edc79e1bb1cbc30cc9db94102cbb",
+      "seed": 991
+    },
+    "eval-mixed-short.bin": {
+      "bytes": 1048576,
+      "sha256": "1e2cca3974a59873f64b69924d9ef3d7cdd8c4270378294c6172ba51c150c351",
+      "seed": 991
+    },
+    "eval-mixed-long.bin": {
+      "bytes": 536870912,
+      "sha256": "b157d2c48362b74c8280bdcceaa3784c4068ce00dd8b7b3144bcf7a9c70673be",
+      "seed": 991
+    },
+    "eval-entropy-short.bin": {
+      "bytes": 1048576,
+      "sha256": "7f3d7023ab42fcf42da6319dcff7daa6c94c6ff0cfc2248e1e426bead79ce038",
+      "seed": 991
+    },
+    "eval-entropy-long.bin": {
+      "bytes": 536870912,
+      "sha256": "47bdeea7d13ea58b23313ab10e28691575e43c34417c81435045d4abf11bafcf",
+      "seed": 991
+    },
+    "eval-public-short.bin": {
+      "bytes": 1035067,
+      "sha256": "b3d8fa73d48658f82062cdc4a8633feb35a4968d6006d0fadf0e71c129e66f6d",
+      "sources": [
+        {
+          "url": "https://www.rfc-editor.org/rfc/rfc8446.txt",
+          "bytes": 337736,
+          "sha256": "47871bc8820a2c3b6ea89f061055577058862cf543686b82d10131239702b3bd"
+        },
+        {
+          "url": "https://www.rfc-editor.org/rfc/rfc9110.txt",
+          "bytes": 502941,
+          "sha256": "21c1cdce6ab0e5509b04d84a28000836c7a087cf786efe6f04877ebfff47232a"
+        },
+        {
+          "url": "https://www.rfc-editor.org/rfc/rfc9111.txt",
+          "bytes": 84477,
+          "sha256": "aeb52adb3279d5f23dae34f68af11bd5cef0a0aff7ffcd014c9ca93c5302cf3e"
+        },
+        {
+          "url": "https://www.rfc-editor.org/rfc/rfc9112.txt",
+          "bytes": 109913,
+          "sha256": "e4f426bac6206b67fdf9e0da826154f70588db2133a0a86b15cde4ff725d8937"
+        }
+      ]
+    }
+  }
+}

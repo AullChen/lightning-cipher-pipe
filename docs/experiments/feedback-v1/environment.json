@@ -1,0 +1,44 @@
+{
+  "cpu": "Intel Core i9-13900HX",
+  "physicalCores": 24,
+  "logicalProcessors": 32,
+  "physicalMemoryBytes": 16858472448,
+  "os": "Windows 11 Pro 10.0.22621",
+  "filesystem": "NTFS",
+  "storage": "KIOXIA EXCERIA PLUS G3 NVMe SSD",
+  "java": "Microsoft OpenJDK 17.0.7+7-LTS",
+  "python": "3.10.6",
+  "zstdJni": "1.5.7-16",
+  "security": "TLS 1.3 mTLS + HPKE Auth",
+  "peers": "source, target and bounded TCP proxy share one fresh JVM per run",
+  "compressionWorkers": 1,
+  "perPeerBufferBytes": 536870912,
+  "perPeerMetadataBytes": 8388608,
+  "heapLimitBytes": 2147483648,
+  "jvmProcessorCountsByPhase": {
+    "train": {
+      "32": 90
+    },
+    "eval": {
+      "32": 261,
+      "16": 14
+    },
+    "confirm": {
+      "16": 20
+    },
+    "quota": {
+      "16": 2
+    },
+    "scale": {
+      "16": 2
+    }
+  },
+  "jvmReportedProcessors": [
+    16,
+    32
+  ],
+  "sourceRevisions": [
+    "8f191e7b20e167e7793626db8f997ef67f40e348"
+  ],
+  "rawArchiveSha256": "89f7f0f0719d88e6fa769ada4c3d5613c76abab4148b528c8b1b7a928e14da28"
+}

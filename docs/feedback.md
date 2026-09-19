@@ -19,4 +19,4 @@ FEEDBACK 只改变后续新块的大小、并发窗口和 ZSTD 等级。控制�
 
 在源配置中设置 `scheduling=FEEDBACK`。`chunkBytes` 和 `zstdLevel` 为初始值；`inFlightChunks` 为窗口上限，`initialWindow` 可指定初始窗口，默认等于上限。块大小范围从 256 KiB 到 `min(maxPlainBytes, 8 MiB)`；ZSTD 等级范围为 1–5。最大块仍须满足帧大小和压缩上界检查。FIXED 不接受 `initialWindow`，继续以 `inFlightChunks` 作为固定窗口。
 
-这些阈值是 policyVersion 1 的启发式规则。单轮观测无法区分链路变化与调参因果；当前测试验证行为、资源和内容不变式，尚未证明性能收益。改变阈值需提升策略版本并提供实验依据。
+这些阈值是 policyVersion 1 的启发式规则。单轮观测无法区分链路变化与调参因果；测试验证行为、资源和内容不变式；[五策略受控实验](experiments/feedback-v1/README.md)未确认相对训练固定基线的预定收益。改变阈值需提升策略版本并提供实验依据。
