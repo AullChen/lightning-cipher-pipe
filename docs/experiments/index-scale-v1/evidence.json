@@ -1,0 +1,68 @@
+{
+  "baseRevision": "d1125863a80584c8ee3cc5620f80218822b6f3b9",
+  "harnessSha256": {
+    "benchmarks/index_scale.py": "ecdfc1e3545c130394b792cbc153dd6ec68d5956711dfc01b28d9c16633144a4",
+    "benchmarks/run.py": "54aec48c4296baba8a54daa12fc2dac9973b7bdf813af8ea0741181600eeb31e",
+    "benchmarks/src/main/java/io/github/aullchen/lcp/examples/IndexScaleRun.java": "5859a73e7d2b914ca8c5b8b64edeca176089efb378190d701bc5160ee5759b99"
+  },
+  "jvmFlags": [
+    "-Xms64m",
+    "-Xmx256m",
+    "-XX:NativeMemoryTracking=summary",
+    "-XX:+UnlockDiagnosticVMOptions",
+    "-XX:+PrintNMTStatistics"
+  ],
+  "rssIntervalMillis": 50,
+  "runs": [
+    {
+      "status": "PASS",
+      "scope": "synthetic-storage-index-fixture",
+      "slots": 65536,
+      "prefilledReceipts": 65535,
+      "metadataBudgetPerSide": 3407872,
+      "sourceIndexBytes": 3211264,
+      "sinkIndexBytes": 3407872,
+      "journalBytes": 4456448,
+      "recoveryNanos": 330108500,
+      "fullReopenNanos": 307622200,
+      "receiptPagesChecked": 512,
+      "payloadBytesVerified": 65536,
+      "durationNanos": 1003129400,
+      "peakHeapPoolSum": 53623920,
+      "javaVersion": "17.0.7",
+      "os": "Windows 11",
+      "processors": 32,
+      "exitCode": 0,
+      "timedOut": false,
+      "peakRssBytes": 115605504,
+      "rssSamples": 24,
+      "nmtNativeCommittedAtExit": 129248210,
+      "wallSeconds": 1.2339999999967404
+    },
+    {
+      "status": "PASS",
+      "scope": "synthetic-storage-index-fixture",
+      "slots": 1000000,
+      "prefilledReceipts": 999999,
+      "metadataBudgetPerSide": 52000000,
+      "sourceIndexBytes": 49000000,
+      "sinkIndexBytes": 52000000,
+      "journalBytes": 68000000,
+      "recoveryNanos": 4219473400,
+      "fullReopenNanos": 5859279700,
+      "receiptPagesChecked": 7814,
+      "payloadBytesVerified": 1000000,
+      "durationNanos": 14013610200,
+      "peakHeapPoolSum": 198668288,
+      "javaVersion": "17.0.7",
+      "os": "Windows 11",
+      "processors": 32,
+      "exitCode": 0,
+      "timedOut": false,
+      "peakRssBytes": 285413376,
+      "rssSamples": 283,
+      "nmtNativeCommittedAtExit": 127195762,
+      "wallSeconds": 14.297000000020489
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "baseRevision": "d1125863a80584c8ee3cc5620f80218822b6f3b9",
+  "harnessSha256": {
+    "benchmarks/index_scale.py": "ecdfc1e3545c130394b792cbc153dd6ec68d5956711dfc01b28d9c16633144a4",
+    "benchmarks/run.py": "54aec48c4296baba8a54daa12fc2dac9973b7bdf813af8ea0741181600eeb31e",
+    "benchmarks/src/main/java/io/github/aullchen/lcp/examples/IndexScaleRun.java": "5859a73e7d2b914ca8c5b8b64edeca176089efb378190d701bc5160ee5759b99"
+  },
+  "jvmFlags": [
+    "-Xms64m",
+    "-Xmx256m",
+    "-XX:NativeMemoryTracking=summary",
+    "-XX:+UnlockDiagnosticVMOptions",
+    "-XX:+PrintNMTStatistics"
+  ],
+  "rssIntervalMillis": 50,
+  "runs": [
+    {
+      "status": "PASS",
+      "scope": "synthetic-storage-index-fixture",
+      "slots": 257,
+      "prefilledReceipts": 256,
+      "metadataBudgetPerSide": 13364,
+      "sourceIndexBytes": 12593,
+      "sinkIndexBytes": 13364,
+      "journalBytes": 17476,
+      "recoveryNanos": 20187000,
+      "fullReopenNanos": 16168500,
+      "receiptPagesChecked": 3,
+      "payloadBytesVerified": 257,
+      "durationNanos": 236354500,
+      "peakHeapPoolSum": 14680064,
+      "javaVersion": "17.0.7",
+      "os": "Windows 11",
+      "processors": 32,
+      "exitCode": 0,
+      "timedOut": false,
+      "peakRssBytes": 59699200,
+      "rssSamples": 10,
+      "nmtNativeCommittedAtExit": 117473918,
+      "wallSeconds": 0.5469999999622814
+    }
+  ]
+}

@@ -45,3 +45,7 @@ RSS is sampled every 50 ms and includes the OS process high-water mark where ava
 ## Publishing a report
 
 `python benchmarks/analyze.py` validates the complete registered matrix, computes throughput and uncertainty summaries, and writes the public report under `docs/experiments/feedback-v1`. It also reads `benchmarks/results/environment.json`: record the measured CPU, RAM, operating system, JVM, filesystem and storage there, using the fields in the published environment file. This environment input is separate from the anonymous per-run measurements. The report archives all training/evaluation/confirmation/resource records as deterministic gzip JSONL; exploratory smoke runs are excluded. No failed trial is silently rerun or dropped.
+
+## Large index boundary checks
+
+`python benchmarks/index_scale.py` runs separate 65,536- and 1,000,000-slot storage checks under a 256 MiB JVM heap limit after building the benchmark profile. It constructs a deterministic near-full journal fixture, then uses the real FileSink recovery/commit and source receipt reconciliation paths. It verifies exact metadata budgets, last-slot idempotence, explicit overflow refusal, full-index reopening and payload bytes. It is not a million-request network benchmark. Results and scope are in the [index report](../docs/experiments/index-scale-v1/README.md). Generated fixtures remain under ignored results; a new `--output` directory is required for another run.
