@@ -13,6 +13,8 @@
 
 Windows 对应使用 `mvnw.cmd`。首次运行需要下载固定版本的 Maven 与依赖。快速测试入口为 `test`，完整快速构建为 `clean verify`。
 
+快速上手、开发证书及双节点运行见 [SDK 指南](docs/sdk.md)。
+
 ## 当前实现
 
 | 模块 | 功能 |

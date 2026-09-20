@@ -2,7 +2,6 @@ package io.github.aullchen.lcp.examples;
 
 import org.junit.jupiter.api.Test;
 import java.nio.file.*;
-import java.security.*;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
@@ -26,18 +25,13 @@ class TransferNodeTest extends StorageTestSupport {
     }
     @org.junit.jupiter.params.ParameterizedTest @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
     void separateProcessesRunConfiguredZstdTransfer(boolean crashTarget) throws Exception {
-        var ca = Certificates.ca(); var source = Certificates.leaf(ca,"source-a",true); var target = Certificates.leaf(ca,"target-a",false);
         char[] password = "temporary-test-password".toCharArray();
-        KeyStore trust = KeyStore.getInstance("PKCS12"); trust.load(null,null); trust.setCertificateEntry("ca",ca.certificate());
-        Path trustFile = root.resolve("trust.p12"); try (var out = Files.newOutputStream(trustFile)) { trust.store(out,password); }
-        for (String role : List.of("source","target")) {
-            var identity = role.equals("source") ? source : target;
-            KeyStore keys = KeyStore.getInstance("PKCS12"); keys.load(null,null);
-            keys.setKeyEntry("identity",identity.key().getPrivate(),password,new java.security.cert.Certificate[]{identity.certificate(),ca.certificate()});
-            try (var out = Files.newOutputStream(root.resolve(role+".p12"))) { keys.store(out,password); }
-            var hpke = KeyPairGenerator.getInstance("X25519").generateKeyPair();
-            Files.write(root.resolve(role+".pk8"),hpke.getPrivate().getEncoded()); Files.write(root.resolve(role+".spki"),hpke.getPublic().getEncoded());
-        }
+        Path credentials = root.resolve("secrets");
+        DevelopmentCredentials.create(credentials, password, password);
+        Path trustFile = credentials.resolve("trust.p12");
+        byte[] originalKey = Files.readAllBytes(credentials.resolve("source.pk8"));
+        assertThrows(FileAlreadyExistsException.class, () -> DevelopmentCredentials.create(credentials, password, password));
+        assertArrayEquals(originalKey, Files.readAllBytes(credentials.resolve("source.pk8")));
         Properties targetConfig = properties("target",trustFile);
         targetConfig.setProperty("listenPort","0"); targetConfig.setProperty("outputRoot",root.resolve("output").toAbsolutePath().toString());
         Path targetFile = save("target",targetConfig), targetLog = root.resolve("target.log");
@@ -80,8 +74,8 @@ class TransferNodeTest extends StorageTestSupport {
         if (role.equals("source")) p.setProperty("controlRecord",root.resolve("source-control.cbor").toAbsolutePath().toString());
         p.setProperty("nodeId",role+"-a"); p.setProperty("peerNodeId",peer+"-a"); p.setProperty("routeId","demo");
         p.setProperty("hpkeKeyId",role+"-hpke-1"); p.setProperty("peerHpkeKeyId",peer+"-hpke-1");
-        p.setProperty("tlsTrustStore",trust.toAbsolutePath().toString()); p.setProperty("tlsKeyStore",root.resolve(role+".p12").toAbsolutePath().toString());
-        p.setProperty("hpkePrivateKey",root.resolve(role+".pk8").toAbsolutePath().toString()); p.setProperty("peerHpkePublicKey",root.resolve(peer+".spki").toAbsolutePath().toString());
+        p.setProperty("tlsTrustStore",trust.toAbsolutePath().toString()); p.setProperty("tlsKeyStore",root.resolve("secrets").resolve(role+".p12").toAbsolutePath().toString());
+        p.setProperty("hpkePrivateKey",root.resolve("secrets").resolve(role+".pk8").toAbsolutePath().toString()); p.setProperty("peerHpkePublicKey",root.resolve("secrets").resolve(peer+".spki").toAbsolutePath().toString());
         p.setProperty("maxPlainBytes","262144"); p.setProperty("maxFrameBytes","300000"); p.setProperty("maxChunks","32"); p.setProperty("maxTransferBytes","8388608");
         p.setProperty("metadataBudget","4096"); p.setProperty("bufferBudget","67108864"); return p;
     }

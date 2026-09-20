@@ -26,8 +26,8 @@ JDK HTTP 参考适配器使用固定线程数、有界队列和拒绝策略。�
 
 自动化测试使用 RFC 固定套件向量、项目规范 AAD/frame，以及临时生成的证书进行双向 TLS 握手。覆盖错误 CA、无客户端证书、节点或主机名不符、SAN 缺失/重复、证书过期/用途错误、路由拒绝、撤销密钥、SPKI 轮换、正文与响应超时、有界队列及响应体上限。
 
-证书测试密钥仅存在于测试进程内。仓库中的 RFC 私钥字节是公开标准向量，仅用于测试，不能用于部署。
+自动化测试的证书密钥位于测试进程或隔离临时目录中；开发演示生成器将短期密钥写入指定的新目录，详见 [SDK 指南](sdk.md)。仓库中的 RFC 私钥字节是公开标准向量，仅用于测试，不能用于部署。
 
-HPKE 不承诺接收方长期私钥泄露后的历史密文保密。认证成功也不等于持久 ACK 或传输完成：目标在持久写入后确认 receipt，在输出重读和最终承诺一致后发布 COMPLETED。当前具备持久接纳与基本幂等，自动故障恢复和业务导入尚未交付。
+HPKE 不承诺接收方长期私钥泄露后的历史密文保密。认证成功也不等于持久 ACK 或传输完成：目标在持久写入后确认 receipt，在输出重读和最终承诺一致后发布 COMPLETED。当前已支持持久接纳、分页对账、有界重试、目标校验恢复及源控制记录恢复；业务导入尚未交付。
 
 参考：[RFC 9180](https://www.rfc-editor.org/rfc/rfc9180)、[Bouncy Castle HPKE API](https://downloads.bouncycastle.org/java/docs/bcprov-jdk18on-javadoc/org/bouncycastle/crypto/hpke/HPKE.html)、[JDK HTTP 服务端配置](https://github.com/openjdk/jdk17u/blob/master/src/jdk.httpserver/share/classes/sun/net/httpserver/ServerConfig.java)。
