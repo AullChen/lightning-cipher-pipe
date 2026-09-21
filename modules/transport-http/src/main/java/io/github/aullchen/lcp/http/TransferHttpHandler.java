@@ -84,7 +84,7 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
                 SinkSession session = sink.recover(id); pinned = session;
                 BoundTransfer context = BoundTransfer.restore(session.state().transfer(), directory);
                 if ("GET".equals(method)) {
-                    context.checkReader(source); emptyBody(x);
+                    context.checkReader(source); emptyBody(x); session.expire(clock.instant());
                     if (session.state().state() == State.VERIFYING) resume(session);
                     try (var lease = reserve(4L * MetadataCodec.CONTROL_LIMIT)) {
                         if (parts.length == 1 && x.getRequestURI().getRawQuery() == null) send(x, 200, TransferJson.status(session.state()));
@@ -96,6 +96,7 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
                     return;
                 }
                 context.checkWriter(source, target);
+                session.expire(clock.instant());
                 if (x.getRequestURI().getRawQuery() != null) throw new TransferException(INVALID_MESSAGE);
                 if (parts.length == 3 && parts[1].equals("chunks") && "PUT".equals(method)) {
                     long index = unsigned(parts[2]);
@@ -214,6 +215,7 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
                 var stored = existing.state().transfer(); var context = BoundTransfer.restore(stored, directory);
                 context.checkWriter(source, target);
                 if (!stored.request().equals(r)) throw new TransferException(OPEN_CONFLICT);
+                existing.expire(clock.instant());
                 unexpired(context); send(x, 200, MetadataJson.encode(stored.response())); return;
             }
         }
@@ -232,6 +234,7 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
         Accepted a = new Accepted(r.transferId(), new Bytes32(challenge), UUID.randomUUID().toString(), compressionCode, acceptedPolicy, acceptedLimits, r.expiresAt());
         if (!key.publicHash().equals(r.targetPublicKeyHash())) throw new AuthenticationException();
         BoundTransfer context = BoundTransfer.freeze(r, a, source, target, directory, clock.instant());
+        sink.expire(clock.instant());
         try (var session = sink.open(context.stored())) { send(x, 201, MetadataJson.encode(session.state().transfer().response())); }
     }
     private void unexpired(BoundTransfer context) throws TransferException { if (!context.accepted().expiresAt().isAfter(clock.instant())) throw new TransferException(EXPIRED); }

@@ -43,6 +43,10 @@ Finish 在 receipt 数量、偏移连续性与总长度吻合后进入 VERIFYING
 
 认证、格式、完整性、范围冲突和 UNKNOWN_COMMIT 不自动重试。发送耗尽后再次对账仍有缺块时，发送器尝试一次取消并报告未知结果；取消未确认时不得复用 transferId。完成态响应丢失后只接受与原 Finish 清单完全一致的持久 COMPLETED 结果；VERIFYING 可在有界查询内等待，不能当作成功。
 
+## 到期收尾
+
+目标在认证状态查询、写入入场及新任务接纳时检查写入期限；启动器也检查持久活动任务。到期的 OPEN/TRANSFERRING 停止新写入，等待已接纳 I/O 退出后持久记录 FAILED/EXPIRED，保留载荷及 receipt，再允许新任务接纳。排空失败或超时记录 RECOVERY_REQUIRED，不把不确定写入当作已安全结束。已经接纳的 VERIFYING 仍使用独立校验期限。源恢复先判断权威 COMPLETED/FAILED/CANCELLED 状态，即使缺少 Accepted 也不先重放过期 Open；RECOVERY_REQUIRED 仍停止恢复。
+
 ## 生命周期恢复
 
 Finish 持久记录完整清单及 VERIFYING 后，由单个后台校验器重读输出。快速完成返回 200，否则返回 202；同一 Finish 不启动第二个校验器。启动器扫描并恢复唯一待校验任务，认证状态查询也可触发恢复。校验拥有独立许可，HTTP 响应结束不释放它；源端等待完成状态，已接纳的校验不受写入 TTL 到期中断。

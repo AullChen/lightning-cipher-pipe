@@ -7,5 +7,7 @@ import java.util.UUID;
 public interface TransferSink extends AutoCloseable {
     SinkSession open(AcceptedTransfer transfer) throws IOException;
     SinkSession recover(UUID transferId) throws IOException;
+    /** Finalize expired writable tasks before startup recovery or new admission. */
+    void expire(java.time.Instant now) throws IOException;
     @Override void close() throws IOException;
 }

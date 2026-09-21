@@ -156,6 +156,13 @@ public final class FixedTransferClient implements AutoCloseable {
                     || endpoint.getRawQuery()!=null || endpoint.getRawFragment()!=null || accepted!=null && !accepted.request().equals(request)) throw new IllegalArgumentException("Invalid recovery context");
             URI uri=URI.create(endpoint+"/"+request.transferId());
             var response=http.get(uri,request.targetNodeId(),request.routeId(),directory,MetadataCodec.CONTROL_LIMIT);
+            if (response.status()==200) {
+                var known=TransferJson.status(response.body());
+                if (!known.transferId().equals(request.transferId())) throw new AuthenticationException();
+                if (known.state()==State.COMPLETED) return known;
+                if (known.state()==State.CANCELLED || known.state()==State.FAILED) return null;
+                if (known.state()==State.RECOVERY_REQUIRED) throw new TransferException(UNKNOWN_COMMIT);
+            }
             if (response.status()==404 && accepted!=null) throw new TransferException(UNKNOWN_COMMIT);
             if (response.status()==404 || accepted==null && response.status()==200 && TransferJson.status(response.body()).state()!=State.COMPLETED) {
                 // Resolve an Open whose response never reached durable source storage before cancellation.

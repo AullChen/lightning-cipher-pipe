@@ -87,6 +87,7 @@ public final class TransferNode {
         if (role.equals("target")) {
             try (var sink = new FileSink(Path.of(required(p,"outputRoot")),metadata,io,grace);
                  var handler = new TransferHttpHandler(sink,key,directory,route,node,limits,budget,Clock.systemUTC(),Duration.ofMillis(number(p,"verificationTimeoutMillis",600000)),codec,grace)) {
+                sink.expire(Instant.now());
                 var pending=sink.pendingVerification(); if (pending.isPresent()) handler.resume(pending.get());
                 try (var server = new AuthenticatedHttpServer(new InetSocketAddress(p.getProperty("listenHost","127.0.0.1"),Math.toIntExact(number(p,"listenPort",9443))),tls,node,route,directory,Math.toIntExact(limits.maxInFlightChunks())+1,32,handler)) {
                     CountDownLatch stopped = new CountDownLatch(1);

@@ -26,7 +26,7 @@
 
 ## 验证范围
 
-`mvnw clean verify` 执行编译与快速测试；Windows 使用 `mvnw.cmd`。全工程包含 302 项测试，其中 17 项压缩测试、49 项真实 TLS 传输集成测试，并覆盖配置启动的双 JVM 传输。`-Pbenchmarks verify` 另运行代理字节流回归；性能矩阵通过独立 Python 入口执行，不进入快速门禁。
+`mvnw clean verify` 执行编译与快速测试；Windows 使用 `mvnw.cmd`。全工程包含 309 项测试，其中 17 项压缩测试、53 项真实 TLS 传输集成测试，并覆盖配置启动的双 JVM 传输。`-Pbenchmarks verify` 另运行代理字节流回归；性能矩阵通过独立 Python 入口执行，不进入快速门禁。
 
 - V01–V03：规范编码、长度与配额、独立 Merkle 根、api/core 依赖边界。
 - V04–V05：标准 HPKE Auth 向量、AAD/frame 篡改、实际 TLS 身份/SPKI、路由与密钥校验。
@@ -46,3 +46,7 @@
 ## 补充资源验证
 
 V22 增加 65,536 / 1,000,000 槽位的确定性存储夹具检查：近满恢复、全分页对账、最后一槽持久提交与幂等、精确预算拒绝、越界拒绝和满索引重开均通过；在 256 MiB 堆上限下采集 RSS/NMT。它不代表百万次网络传输，完整方法与范围见[大索引报告](experiments/index-scale-v1/README.md)。
+
+## 生命周期与会话修复
+
+R01：到期 OPEN/TRANSFERRING 持久收尾为 FAILED/EXPIRED，排空超时冻结；源缺少接受记录时先识别权威终态。新增假时钟与屏障回归覆盖新任务接纳、启动恢复、在途写入及 VERIFYING 的独立期限。

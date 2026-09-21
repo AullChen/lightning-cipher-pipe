@@ -8,6 +8,8 @@ import java.nio.ByteBuffer;
 /** Implementations acknowledge only durable receipts; close never deletes output. */
 public interface SinkSession extends AutoCloseable {
     SessionState state() throws IOException;
+    /** Stop new writes and drain admitted I/O before persisting FAILED/EXPIRED; leave VERIFYING alone. */
+    void expire(java.time.Instant now) throws IOException;
     void recordTransferring() throws IOException;
     Receipt commit(Chunk chunk) throws IOException;
     /** Optional range admission before commit. Caller closes an unused reservation. */

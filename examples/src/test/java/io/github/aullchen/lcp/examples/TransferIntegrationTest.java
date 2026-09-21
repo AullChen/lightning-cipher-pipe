@@ -91,6 +91,47 @@ class TransferIntegrationTest extends StorageTestSupport {
         assertEquals(TransferJson.httpStatus(code), response.status(), new String(response.body(), StandardCharsets.UTF_8));
         assertEquals(code, TransferJson.error(response.body()));
     }
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void expiryPersistsTerminalStateAndRecoveryWithoutAcceptedAllowsNewId(boolean write) throws Exception {
+        try (var pair = new Pair()) {
+            var request = pair.request(); var opened = pair.open(request);
+            if (write) assertEquals(200,pair.call(opened.path()+"/chunks/0","PUT","application/lcp-frame",opened.chunk(0,0,(byte)7)).status());
+            pair.clock.now=request.expiresAt();
+            var status=pair.status(request.transferId());
+            assertEquals(State.FAILED,status.state()); assertEquals(ErrorCode.EXPIRED,status.error());
+            assertNull(pair.sender.recover(pair.endpoint,request,null));
+            error(pair.call("","POST","application/json",MetadataJson.encode(request)),ErrorCode.EXPIRED);
+            pair.open(pair.request());
+            if (write) assertArrayEquals(new byte[]{7},Files.readAllBytes(root.resolve(request.transferId()+"/payload.bin")));
+        }
+    }
+    @Test void admittedVerificationSurvivesWriteExpiry() throws Exception {
+        var reading=new CountDownLatch(1); var release=new CountDownLatch(1);
+        try (var pair=new Pair(new FileSink.Io(){
+            public int read(java.nio.channels.FileChannel channel,ByteBuffer bytes,long offset) throws IOException {
+                reading.countDown(); LifecycleStorageTest.await(release); return channel.read(bytes,offset);
+            }
+        })) {
+            try {
+                var request=pair.request(); var opened=pair.open(request);
+                assertEquals(200,pair.call(opened.path()+"/chunks/0","PUT","application/lcp-frame",opened.chunk(0,0,(byte)9)).status());
+                var manifest=opened.manifest(new byte[]{9});
+                assertEquals(202,pair.call(opened.path()+"/finish","POST","application/lcp-frame",opened.finish(manifest)).status());
+                assertTrue(reading.await(3,TimeUnit.SECONDS)); pair.clock.now=request.expiresAt();
+                assertEquals(State.VERIFYING,pair.status(request.transferId()).state());
+                release.countDown();
+                var result=pair.call(opened.path()+"/finish","POST","application/lcp-frame",opened.finish(manifest));
+                assertEquals(200,result.status()); assertEquals(State.COMPLETED,TransferJson.status(result.body()).state());
+            } finally { release.countDown(); }
+        }
+    }
+    @Test void newOpenFinalizesExpiredTaskWithoutPriorStatusQuery() throws Exception {
+        try (var pair = new Pair()) {
+            var old=pair.request(); pair.open(old); pair.clock.now=old.expiresAt();
+            pair.open(pair.request());
+            assertEquals(State.FAILED,pair.status(old.transferId()).state());
+        }
+    }
     @ParameterizedTest @ValueSource(ints = {0, 1, 262145, 8388609})
     void realTlsTransferCompletesOnlyWithMatchingPersistedOutput(int length) throws Exception {
         try (var pair = new Pair()) {
