@@ -132,6 +132,66 @@ class TransferIntegrationTest extends StorageTestSupport {
             assertEquals(State.FAILED,pair.status(old.transferId()).state());
         }
     }
+    @ParameterizedTest @ValueSource(strings={"completed","cancelled","expired","recovery-required"})
+    void historicalTerminalQueriesDoNotEvictActiveSession(String kind) throws Exception {
+        var indexes=new java.util.concurrent.atomic.AtomicInteger();
+        try(var pair=new Pair(new FileSink.Io(){ public void indexAllocated(int slots) { indexes.incrementAndGet(); } })) {
+            var old=pair.request(); var prior=pair.open(old);
+            assertEquals(200,pair.call(prior.path()+"/chunks/0","PUT","application/lcp-frame",prior.chunk(0,0,(byte)7)).status());
+            switch(kind) {
+                case "completed" -> assertEquals(200,pair.call(prior.path()+"/finish","POST","application/lcp-frame",prior.finish(prior.manifest(new byte[]{7}))).status());
+                case "cancelled" -> assertEquals(200,pair.call(prior.path()+"/cancel","POST","application/json",TransferJson.cancel(new CancelCommand(old.transferId(),UUID.randomUUID(),prior.context.bindingHash()))).status());
+                case "expired" -> { pair.clock.now=old.expiresAt(); assertEquals(State.FAILED,pair.status(old.transferId()).state()); }
+                default -> { pair.sink.recover(old.transferId()).recordFailure(FailureKind.RECOVERY_REQUIRED,ErrorCode.UNKNOWN_COMMIT); pair.status(old.transferId()); }
+            }
+            var active=pair.open(pair.request()); int allocated=indexes.get();
+            for(int i=0;i<3;i++) {
+                var status=pair.status(old.transferId());
+                assertEquals(1,status.committedChunks()); assertEquals(1,status.committedPlainBytes());
+            }
+            if (kind.equals("recovery-required")) assertEquals(ErrorCode.UNKNOWN_COMMIT,assertThrows(TransferException.class,()->pair.sender.recover(pair.endpoint,old,null)).code());
+            else if (kind.equals("completed")) assertNotNull(pair.sender.recover(pair.endpoint,old,null).result());
+            else assertNull(pair.sender.recover(pair.endpoint,old,null));
+            if(kind.equals("completed")) assertEquals(200,pair.call("","POST","application/json",MetadataJson.encode(old)).status());
+            assertEquals(allocated,indexes.get());
+            error(pair.call(prior.path()+"/receipts?from=0&limit=1","GET",null,new byte[0]),ErrorCode.BUSY);
+            assertEquals(200,pair.call(active.path()+"/chunks/0","PUT","application/lcp-frame",active.chunk(0,0,(byte)8)).status());
+            assertEquals(1,pair.status(active.context.request().transferId()).committedChunks());
+            assertEquals(allocated,indexes.get());
+        }
+    }
+    @ParameterizedTest @ValueSource(ints={128,256,512})
+    void sequentialRequestsRetainOneIndexAndDoNotReplayHistory(int count) throws Exception {
+        var forces=new java.util.concurrent.atomic.AtomicInteger();
+        var indexes=new java.util.concurrent.atomic.AtomicInteger();
+        var replayed=new java.util.concurrent.atomic.AtomicInteger();
+        var bounds=new Limits(300000,262144,count,16*1024*1024,1);
+        var io=new FileSink.Io(){
+            public void force(java.nio.channels.FileChannel channel) throws IOException { forces.incrementAndGet(); channel.force(true); }
+            public void indexAllocated(int slots) { indexes.incrementAndGet(); }
+            public void replayedReceipt() { replayed.incrementAndGet(); }
+        };
+        UUID id;
+        try(var pair=new Pair(io,bounds)) {
+            var r=pair.request();
+            var request=new OpenRequest(r.transferId(),r.routeId(),r.sourceNodeId(),r.targetNodeId(),r.sourceChallenge(),
+                    r.sourceKeyId(),r.sourcePublicKeyHash(),r.targetKeyId(),r.targetPublicKeyHash(),r.compressionOffers(),r.policy(),bounds,r.createdAt(),r.expiresAt());
+            var opened=pair.open(request); id=request.transferId(); int initial=forces.get();
+            for(int i=0;i<count;i++) {
+                assertEquals(200,pair.call(opened.path()+"/chunks/"+i,"PUT","application/lcp-frame",opened.chunk(i,i,(byte)i)).status());
+                assertEquals(i+1,pair.status(request.transferId()).committedChunks());
+                assertEquals(200,pair.call(opened.path()+"/receipts?from="+i+"&limit=1","GET",null,new byte[0]).status());
+            }
+            assertEquals(2,initial); assertEquals(initial,forces.get(),"Ordinary requests replayed the journal");
+            assertEquals(1,indexes.get()); assertEquals(0,replayed.get());
+        }
+        try(var restarted=new FileSink(root,count*52L,io)) {
+            var session=restarted.recover(id);
+            assertEquals(count,session.state().committedChunks());
+            assertEquals(count,session.state().committedPlainBytes());
+            assertEquals(2,indexes.get()); assertEquals(count,replayed.get()); assertEquals(4,forces.get());
+        }
+    }
     @ParameterizedTest @ValueSource(ints = {0, 1, 262145, 8388609})
     void realTlsTransferCompletesOnlyWithMatchingPersistedOutput(int length) throws Exception {
         try (var pair = new Pair()) {
@@ -400,7 +460,7 @@ class TransferIntegrationTest extends StorageTestSupport {
             request=pair.request(); var opened=pair.open(request);
             assertEquals(200,pair.call(opened.path()+"/chunks/0","PUT","application/lcp-frame",opened.chunk(0,0,(byte)1)).status());
             manifest=opened.manifest(new byte[]{1});
-            try (var session=pair.sink.recover(request.transferId())) { session.recordVerifying(manifest); }
+            pair.sink.recover(request.transferId()).recordVerifying(manifest);
         }
         try (var restarted=new Pair()) {
             var pending=restarted.sink.pendingVerification(); assertTrue(pending.isPresent()); restarted.handler.resume(pending.get());
@@ -543,8 +603,8 @@ class TransferIntegrationTest extends StorageTestSupport {
             }
             var f = o.manifest(damage.equals("wrong-root") ? new byte[]{1,2,4} : bytes);
             var response = pair.call(o.path() + "/finish", "POST", "application/lcp-frame", o.finish(f));
-            if (damage.equals("truncated")) { error(response, ErrorCode.STATE_CONFLICT); assertEquals(State.RECOVERY_REQUIRED, pair.status(f.transferId()).state()); }
-            else { error(response, ErrorCode.INTEGRITY_MISMATCH); assertEquals(State.FAILED, pair.status(f.transferId()).state()); }
+            // A retained session detects all payload corruption during Finish, not incidental reopen.
+            error(response, ErrorCode.INTEGRITY_MISMATCH); assertEquals(State.FAILED, pair.status(f.transferId()).state());
         }
     }
     @Test void missingChunksCanBeFilledThenFinishIsIdempotent() throws Exception {

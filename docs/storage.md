@@ -13,3 +13,7 @@
 源端 `SourceControl` 使用单独的进程锁和原子替换保存不超过 64 KiB 的版本化记录，内容仅包括端点、Open 意图、可空的接受事实及完成状态。记录在首次请求前写入，接受事实在读取输入前更新；不含载荷、逐块日志或恢复偏移。未知格式、路径逃逸或同路径的第二个源进程会被拒绝。
 
 `TransferSink.expire(Instant)` 用于启动和新任务接纳前的到期清理，`SinkSession.expire(Instant)` 用于已认证请求入场。适配器必须停止新写入、排空已接纳 I/O 后持久终结；不得通过删除输出释放任务，也不得中断已接纳 VERIFYING 的独立期限。
+
+HTTP 运行时持有唯一活动 `SinkSession`；普通 Chunk、状态及 receipt 请求不关闭它，也不重新分配索引或回放日志。安全终结、切换或运行时关闭才释放会话；真正重开仍执行完整回放和 payload/log 的 force 屏障。
+
+`TransferSink.terminalState(UUID)` 提供不建立第二份索引的历史终态快照。COMPLETED 使用持久结果中的最终计数并检查载荷长度；取消/失败状态通过固定大小记录缓冲读取日志计数。RECOVERY_REQUIRED 的日志无法重建时保留冻结状态，计数为零，不能视为未发生写入。快照不发布恢复 receipt，也不替代 Finish 内容重读。历史终态状态查询及同请求 Open 重放不会挤掉活动会话；需要完整会话的历史 receipt、Chunk、Finish、Cancel 请求在另一个任务活动期间返回 BUSY，待活动任务安全终结后可重试。不会缓存所有历史任务或同时分配多份大索引。

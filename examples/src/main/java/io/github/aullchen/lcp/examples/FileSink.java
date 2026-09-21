@@ -22,6 +22,8 @@ public final class FileSink implements TransferSink {
     enum Boundary { PAYLOAD_WRITTEN, PAYLOAD_FORCED, RECEIPT_WRITTEN, RECEIPT_FORCED, INDEX_PUBLISHED }
     interface Io {
         default int write(FileChannel channel, ByteBuffer bytes, long offset) throws IOException { return channel.write(bytes, offset); }
+        default void indexAllocated(int slots) {}
+        default void replayedReceipt() {}
         default void expiring() throws IOException {}
         default void cancelling() throws IOException {}
         default void after(Boundary boundary) throws IOException {}
@@ -152,6 +154,52 @@ public final class FileSink implements TransferSink {
         if (!t.request().transferId().equals(id)) throw new IOException("Transfer directory mismatch");
         capacity(t); current = new Session(dir, t); return current;
     }
+    @Override public synchronized SessionState terminalState(UUID id) throws IOException {
+        ready(); Objects.requireNonNull(id);
+        SessionState state;
+        if (current != null && current.transfer.request().transferId().equals(id)) {
+            state=current.state();
+            return active(state.state()) ? null : state;
+        }
+        Path dir=root.resolve(id.toString());
+        if (!Files.exists(dir,LinkOption.NOFOLLOW_LINKS)) throw new TransferException(NOT_FOUND);
+        safe(dir,true);
+        var transfer=StorageCodec.open(readSmall(dir.resolve("open.cbor")));
+        if (!transfer.request().transferId().equals(id)) throw new IOException("Transfer directory mismatch");
+        state=StorageCodec.state(readSmall(dir.resolve("state.cbor")),transfer);
+        if (active(state.state())) return null;
+        // COMPLETED contains final totals; other terminal states use a bounded journal scan.
+        long count=0,total=0;
+        if (state.state()==State.COMPLETED) {
+            count=state.result().totalChunks(); total=state.result().totalPlainBytes();
+            safe(dir.resolve("payload.bin"),false);
+            if (Files.size(dir.resolve("payload.bin"))!=total) throw new IOException("Completed output length mismatch");
+        } else {
+            try {
+                safe(dir.resolve("receipts.log"),false);
+                try (var log=FileChannel.open(dir.resolve("receipts.log"),READ,LinkOption.NOFOLLOW_LINKS)) {
+                ByteBuffer record=ByteBuffer.allocate(RECORD); long size=log.size();
+                if (size%RECORD!=0 || size/RECORD>transfer.response().accepted().limits().maxChunks()) throw new IOException("Invalid terminal receipt count");
+                for(long pos=0;pos<size;pos+=RECORD) {
+                    record.clear(); readFully(log,record,pos); record.flip();
+                    var crc=new CRC32C(); crc.update(record.array(),0,64);
+                    if(record.getInt()!=0x4c435052 || record.getInt()!=1 || record.getInt(64)!=(int)crc.getValue()) throw new IOException("Corrupt terminal receipt");
+                    long index=record.getLong(),offset=record.getLong(),length=record.getLong();
+                    var bounds=transfer.response().accepted().limits();
+                    if(index<0 || index>=bounds.maxChunks() || offset<0 || length<1 || length>bounds.maxPlainBytes()
+                            || offset>bounds.maxTransferBytes()-length) throw new IOException("Invalid terminal receipt range");
+                    count++; total=Math.addExact(total,length);
+                }
+                }
+            } catch (IOException | ArithmeticException e) {
+                if (state.state()!=State.RECOVERY_REQUIRED) throw new IOException("Cannot read terminal receipt totals",e);
+                // Preserve the authoritative frozen state even if its journal cannot be reconstructed.
+                count=0; total=0;
+            }
+        }
+        return new SessionState(transfer,state.state(),Math.addExact(state.revision(),count),
+                count,total,state.finish(),state.result(),state.error(),state.cancel());
+    }
     @Override public synchronized void expire(java.time.Instant now) throws IOException {
         ready(); Objects.requireNonNull(now);
         if (current != null) current.expire(now);
@@ -206,7 +254,7 @@ public final class FileSink implements TransferSink {
         Session(Path dir, AcceptedTransfer transfer) throws IOException {
             this.dir = dir; this.transfer = transfer; limits = transfer.response().accepted().limits();
             int slots = Math.toIntExact(limits.maxChunks());
-            index = ByteBuffer.allocate(Math.multiplyExact(slots, SLOT)); ordered = new int[slots];
+            index = ByteBuffer.allocate(Math.multiplyExact(slots, SLOT)); ordered = new int[slots]; io.indexAllocated(slots);
             try { saved = StorageCodec.state(readSmall(dir.resolve("state.cbor")), transfer); }
             catch (IllegalArgumentException e) { throw new IOException("Invalid state record", e); }
             safe(dir.resolve("payload.bin"), false); safe(dir.resolve("receipts.log"), false);
@@ -233,7 +281,7 @@ public final class FileSink implements TransferSink {
                 Receipt r = new Receipt(transfer.request().transferId(), i, offset, length, new Bytes32(hash));
                 validateRange(r);
                 if (receipt(i) != null || payload.size() < offset + length) throw new IOException("Inconsistent receipt");
-                insert(r);
+                insert(r); io.replayedReceipt();
             }
             if (size != complete) log.truncate(complete);
             if (saved.state() == State.COMPLETED && (saved.result().totalChunks() != count || saved.result().totalPlainBytes() != total

@@ -68,18 +68,26 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
         Semaphore admission = x.getRequestURI().getRawPath().contains("/chunks/") ? slots : controls;
         if (!admission.tryAcquire()) { lock.unlock(); error(x, BUSY); return; }
         try {
+            if (closed) throw new TransferException(UNAVAILABLE);
             if (!node.equals(target.nodeId())) throw new AuthenticationException();
             String path = x.getRequestURI().getRawPath(), method = x.getRequestMethod();
             if (BASE.equals(path) && "POST".equals(method)) {
                 if (x.getRequestURI().getRawQuery() != null) throw new TransferException(INVALID_MESSAGE);
                 if (running()) throw new TransferException(BUSY);
-                if (pinned != null) { pinned.close(); pinned = null; }
                 try (var lease = reserve(4L * MetadataCodec.CONTROL_LIMIT)) { open(x, source, target); }
                 return;
             }
             if (!path.startsWith(BASE + "/")) throw new TransferException(NOT_FOUND);
             String[] parts = path.substring(BASE.length() + 1).split("/", -1);
             UUID id = uuid(parts[0]);
+            if ("GET".equals(method) && parts.length==1 && x.getRequestURI().getRawQuery()==null) {
+                var terminal=sink.terminalState(id);
+                if (terminal!=null) {
+                    BoundTransfer.restore(terminal.transfer(),directory).checkReader(source); emptyBody(x);
+                    try (var lease=reserve(4L*MetadataCodec.CONTROL_LIMIT)) { send(x,200,TransferJson.status(terminal)); }
+                    return;
+                }
+            }
             {
                 SinkSession session = sink.recover(id); pinned = session;
                 BoundTransfer context = BoundTransfer.restore(session.state().transfer(), directory);
@@ -158,10 +166,18 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
             admission.release(); lock.unlock(); cleanupPinned();
         }
     }
+    private static boolean terminal(State state) { return state!=State.OPEN && state!=State.TRANSFERRING && state!=State.VERIFYING; }
     private boolean running() { var task = verification; return task != null && !task.done().isDone(); }
     private void cleanupPinned() throws IOException {
         if (lifecycle.writeLock().tryLock()) {
-            try { if (!running() && pinned != null) { pinned.close(); pinned = null; } }
+            try {
+                synchronized (this) {
+                    if (!running()) {
+                        if (pinned != null && (closed || terminal(pinned.state().state()))) { pinned.close(); pinned = null; }
+                        verification=null; // A completed task must not retain the closed session's index.
+                    }
+                }
+            }
             finally { lifecycle.writeLock().unlock(); }
         }
     }
@@ -202,22 +218,35 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
     @Override public void close() throws IOException {
         synchronized (this) { closed = true; verifier.shutdown(); }
         var task = verification; if (task != null) await(task,shutdownGrace,true);
-        cleanupPinned();
+        boolean locked;
+        try { locked=lifecycle.writeLock().tryLock(shutdownGrace.toNanos(),java.util.concurrent.TimeUnit.NANOSECONDS); }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new TransferException(UNKNOWN_COMMIT); }
+        if (!locked) throw new TransferException(UNKNOWN_COMMIT);
+        try { cleanupPinned(); } finally { lifecycle.writeLock().unlock(); }
     }
     private void open(HttpsExchange x, TlsIdentity source, TlsIdentity target) throws IOException {
         OpenRequest r = MetadataJson.decode(body(x, "application/json", MetadataCodec.CONTROL_LIMIT), OpenRequest.class);
         if (!r.routeId().equals(route) || !r.sourceNodeId().equals(source.nodeId()) || !r.targetNodeId().equals(node)) throw new AuthenticationException();
+        sink.expire(clock.instant()); cleanupPinned();
+        SessionState terminal;
+        try { terminal=sink.terminalState(r.transferId()); }
+        catch (TransferException e) { if (e.code()!=NOT_FOUND) throw e; terminal=null; }
+        if (terminal!=null) {
+            var stored=terminal.transfer(); var context=BoundTransfer.restore(stored,directory);
+            context.checkWriter(source,target);
+            if (!stored.request().equals(r)) throw new TransferException(OPEN_CONFLICT);
+            unexpired(context); send(x,200,MetadataJson.encode(stored.response())); return;
+        }
         SinkSession prior;
         try { prior = sink.recover(r.transferId()); }
         catch (TransferException e) { if (e.code() != NOT_FOUND) throw e; prior = null; }
         if (prior != null) {
-            try (SinkSession existing = prior) {
-                var stored = existing.state().transfer(); var context = BoundTransfer.restore(stored, directory);
-                context.checkWriter(source, target);
-                if (!stored.request().equals(r)) throw new TransferException(OPEN_CONFLICT);
-                existing.expire(clock.instant());
-                unexpired(context); send(x, 200, MetadataJson.encode(stored.response())); return;
-            }
+            pinned=prior;
+            var stored = prior.state().transfer(); var context = BoundTransfer.restore(stored, directory);
+            context.checkWriter(source, target);
+            if (!stored.request().equals(r)) throw new TransferException(OPEN_CONFLICT);
+            prior.expire(clock.instant());
+            unexpired(context); send(x, 200, MetadataJson.encode(stored.response())); return;
         }
         if (!r.expiresAt().isAfter(clock.instant())) throw new TransferException(EXPIRED);
         Policy p = r.policy();
@@ -234,8 +263,8 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
         Accepted a = new Accepted(r.transferId(), new Bytes32(challenge), UUID.randomUUID().toString(), compressionCode, acceptedPolicy, acceptedLimits, r.expiresAt());
         if (!key.publicHash().equals(r.targetPublicKeyHash())) throw new AuthenticationException();
         BoundTransfer context = BoundTransfer.freeze(r, a, source, target, directory, clock.instant());
-        sink.expire(clock.instant());
-        try (var session = sink.open(context.stored())) { send(x, 201, MetadataJson.encode(session.state().transfer().response())); }
+        var session = sink.open(context.stored()); pinned=session;
+        send(x, 201, MetadataJson.encode(session.state().transfer().response()));
     }
     private void unexpired(BoundTransfer context) throws TransferException { if (!context.accepted().expiresAt().isAfter(clock.instant())) throw new TransferException(EXPIRED); }
     private ByteBudget.Lease reserve(long bytes) throws TransferException {
