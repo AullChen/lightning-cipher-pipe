@@ -91,6 +91,48 @@ class TransferIntegrationTest extends StorageTestSupport {
         assertEquals(TransferJson.httpStatus(code), response.status(), new String(response.body(), StandardCharsets.UTF_8));
         assertEquals(code, TransferJson.error(response.body()));
     }
+    @ParameterizedTest @org.junit.jupiter.params.provider.CsvSource({"0,false,2", "1,false,1", "0,true,2", "1,true,1"})
+    void negotiationAdvertisesBudgetSlotsAndRejectsUnsatisfiedFixed(int code,boolean fixed,int slots) throws Exception {
+        var bounds=new Limits(3000000,262144,128,16*1024*1024,8);
+        try (var pair=new Pair(new FileSink.Io(){},bounds)) {
+            var old=pair.request();
+            var policy=new Policy(fixed?0:1,1,262144,262144,262144,fixed?4:1,4,4,1,1,1);
+            var request=new OpenRequest(old.transferId(),old.routeId(),old.sourceNodeId(),old.targetNodeId(),
+                    old.sourceChallenge(),old.sourceKeyId(),old.sourcePublicKeyHash(),old.targetKeyId(),
+                    old.targetPublicKeyHash(),List.of(code),policy,bounds,old.createdAt(),old.expiresAt());
+            if (fixed) {
+                error(pair.call("","POST","application/json",MetadataJson.encode(request)),ErrorCode.LIMIT_EXCEEDED);
+                assertFalse(Files.exists(root.resolve(request.transferId().toString())));
+            } else {
+                var result=pair.sender.transfer(pair.endpoint,request,new GeneratorSource(524289,42),stored -> {
+                    var accepted=stored.response().accepted();
+                    assertEquals(slots,accepted.limits().maxInFlightChunks());
+                    assertEquals(slots,accepted.policy().maxWindow());
+                    assertEquals(slots,accepted.policy().initialWindow());
+                });
+                assertEquals(524289,result.totalPlainBytes()); assertEquals(3,result.totalChunks());
+            }
+            assertEquals(0,pair.sourceBudget.used()); assertEquals(0,pair.targetBudget.used());
+        }
+    }
+    @ParameterizedTest @ValueSource(ints={262144,524288})
+    void feedbackNegotiatesLegalIntersectionBeforeTransfer(int initial) throws Exception {
+        try (var pair=new Pair()) {
+            var old=pair.request();
+            var policy=new Policy(1,1,262144,524288,initial,1,4,3,1,5,3);
+            var offered=new Limits(600000,524288,128,16*1024*1024,4);
+            var request=new OpenRequest(old.transferId(),old.routeId(),old.sourceNodeId(),old.targetNodeId(),
+                    old.sourceChallenge(),old.sourceKeyId(),old.sourcePublicKeyHash(),old.targetKeyId(),
+                    old.targetPublicKeyHash(),List.of(0),policy,offered,old.createdAt(),old.expiresAt());
+            var result=pair.sender.transfer(pair.endpoint,request,new GeneratorSource(524289,42),stored -> {
+                var accepted=stored.response().accepted();
+                assertEquals(LIMITS,accepted.limits());
+                assertEquals(new Policy(1,1,262144,262144,262144,1,1,1,1,1,1),accepted.policy());
+            });
+            assertEquals(524289,result.totalPlainBytes()); assertEquals(3,result.totalChunks());
+            assertEquals(0,pair.sourceBudget.used()); assertEquals(0,pair.targetBudget.used());
+        }
+    }
     @ParameterizedTest @ValueSource(booleans = {false, true})
     void expiryPersistsTerminalStateAndRecoveryWithoutAcceptedAllowsNewId(boolean write) throws Exception {
         try (var pair = new Pair()) {
@@ -289,8 +331,12 @@ class TransferIntegrationTest extends StorageTestSupport {
             var policy = new Policy(1,1,262144,524288,262144,1,3,2,1,code==0?1:5,1);
             var request = new OpenRequest(fixed.transferId(),fixed.routeId(),fixed.sourceNodeId(),fixed.targetNodeId(),fixed.sourceChallenge(),
                     fixed.sourceKeyId(),fixed.sourcePublicKeyHash(),fixed.targetKeyId(),fixed.targetPublicKeyHash(),List.of(code),policy,bounds,fixed.createdAt(),fixed.expiresAt());
-            var result = pair.sender.transfer(pair.endpoint,request,new GeneratorSource(524289,42),accepted ->
-                    assertEquals(policy,accepted.response().accepted().policy()));
+            // The ZSTD workspace leaves room for only one target slot in this budget.
+            var expected = code==0 ? policy : new Policy(1,1,262144,524288,262144,1,1,1,1,5,1);
+            var result = pair.sender.transfer(pair.endpoint,request,new GeneratorSource(524289,42),accepted -> {
+                assertEquals(expected,accepted.response().accepted().policy());
+                assertEquals(code==0?3:1,accepted.response().accepted().limits().maxInFlightChunks());
+            });
             assertEquals(3,result.totalChunks()); assertEquals(524289,result.totalPlainBytes());
             assertEquals(524289,pair.sender.metrics().confirmedBytes());
             assertEquals(0,pair.sourceBudget.used()); assertEquals(0,pair.targetBudget.used());

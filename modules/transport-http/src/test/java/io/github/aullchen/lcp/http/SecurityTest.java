@@ -83,6 +83,27 @@ class SecurityTest {
         var changed = MetadataJson.decode(json.getBytes(java.nio.charset.StandardCharsets.UTF_8), OpenRequest.class);
         assertThrows(AuthenticationException.class, () -> BoundTransfer.freeze(changed, accepted(changed), source(), target(), directory(), Instant.now()));
     }
+    @ParameterizedTest @ValueSource(strings={"chunkMin","chunkMax","windowMin","windowMax","initial","mode"})
+    void sourceRejectsExpandedOrIncorrectlyClampedFeedback(String mutation) {
+        var old=request(); var limits=new Limits(600000,524288,100,1000000,8);
+        var policy=new Policy(1,1,262144,400000,350000,2,4,3,1,1,1);
+        var r=new OpenRequest(ID,old.routeId(),old.sourceNodeId(),old.targetNodeId(),old.sourceChallenge(),
+                old.sourceKeyId(),old.sourcePublicKeyHash(),old.targetKeyId(),old.targetPublicKeyHash(),
+                List.of(0),policy,limits,old.createdAt(),old.expiresAt());
+        var valid=new Policy(1,1,262144,300000,300000,2,3,3,1,1,1);
+        assertDoesNotThrow(() -> BoundTransfer.freeze(r,new Accepted(ID,ZERO,"handle",0,valid,limits,r.expiresAt()),
+                source(),target(),directory(),Instant.now()));
+        var changed=switch(mutation) {
+            case "chunkMin" -> new Policy(1,1,131072,300000,300000,2,3,3,1,1,1);
+            case "chunkMax" -> new Policy(1,1,262144,524288,350000,2,3,3,1,1,1);
+            case "windowMin" -> new Policy(1,1,262144,300000,300000,1,3,3,1,1,1);
+            case "windowMax" -> new Policy(1,1,262144,300000,300000,2,5,3,1,1,1);
+            case "initial" -> new Policy(1,1,262144,300000,262144,2,3,3,1,1,1);
+            default -> new Policy(0,1,300000,300000,300000,3,3,3,1,1,1);
+        };
+        assertThrows(AuthenticationException.class,() -> BoundTransfer.freeze(r,
+                new Accepted(ID,ZERO,"handle",0,changed,limits,r.expiresAt()),source(),target(),directory(),Instant.now()));
+    }
     @Test void expiredOrFutureOpenAndExpandedLimitsAreRejected() {
         var r = request();
         assertThrows(AuthenticationException.class, () -> BoundTransfer.freeze(r, accepted(r), source(), target(), directory(), r.expiresAt()));
