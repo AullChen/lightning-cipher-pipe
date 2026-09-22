@@ -366,6 +366,28 @@ class TransferIntegrationTest extends StorageTestSupport {
             assertEquals(0, pair.sourceBudget.used()); assertEquals(0, pair.targetBudget.used());
         }
     }
+    @Test void receiptReconciliationDoesNotCompareStateFileRevision() throws Exception {
+        var dropped=new java.util.concurrent.atomic.AtomicBoolean();
+        var pages=new java.util.concurrent.atomic.AtomicInteger();
+        try (var pair=new Pair(new FileSink.Io(){},LIMITS,handler -> (x,source,target) ->
+                handler.handle(new FaultExchange(x,(path,code,body) -> {
+                    if (path.endsWith("/chunks/0") && code==200 && !dropped.getAndSet(true)) return null;
+                    if (code==200 && path.endsWith("/receipts")) {
+                        var p=TransferJson.page(body); pages.incrementAndGet();
+                        return TransferJson.page(new ReceiptPage(p.transferId(),p.from(),p.limit(),p.entries(),p.nextFrom(),1));
+                    }
+                    if (code==200 && x.getRequestMethod().equals("GET") && !path.endsWith("/receipts")) {
+                        // A conforming peer's state-file counter is independent of receipt count.
+                        return new String(body,StandardCharsets.UTF_8).replaceFirst("\"revision\":\"[0-9]+\"","\"revision\":\"20\"")
+                                .getBytes(StandardCharsets.UTF_8);
+                    }
+                    return body;
+                }),source,target))) {
+            var result=pair.sender.transfer(pair.endpoint,pair.request(),new GeneratorSource(1,42));
+            assertEquals(1,result.totalChunks()); assertEquals(1,pages.get());
+            assertEquals(1,pair.sender.metrics().attempts()); assertEquals(0,pair.sourceBudget.used());
+        }
+    }
     @Test void lostDurableAckIsReconciledAcrossEveryAssignedPage() throws Exception {
         var bounds = new Limits(300000,262144,300,1000,1);
         var dropped = new java.util.concurrent.atomic.AtomicBoolean();

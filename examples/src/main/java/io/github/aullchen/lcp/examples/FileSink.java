@@ -197,7 +197,7 @@ public final class FileSink implements TransferSink {
                 count=0; total=0;
             }
         }
-        return new SessionState(transfer,state.state(),Math.addExact(state.revision(),count),
+        return new SessionState(transfer,state.state(),state.revision(),
                 count,total,state.finish(),state.result(),state.error(),state.cancel());
     }
     @Override public synchronized void expire(java.time.Instant now) throws IOException {
@@ -322,7 +322,7 @@ public final class FileSink implements TransferSink {
             count++; total = Math.addExact(total, r.plainLength());
         }
         @Override public synchronized SessionState state() throws IOException {
-            check(); return new SessionState(transfer, saved.state(), Math.addExact(saved.revision(), count), count, total,
+            check(); return new SessionState(transfer, saved.state(), saved.revision(), count, total,
                     saved.finish(), saved.result(), saved.error(), saved.cancel());
         }
         private void save(State state, FinishManifest finish, VerifiedResult result, ErrorCode error, CancelCommand cancel) throws IOException {
@@ -409,7 +409,7 @@ public final class FileSink implements TransferSink {
             if (from < 0 || from > limits.maxChunks() || limit < 1 || limit > 256) throw new TransferException(INVALID_MESSAGE);
             long end = Math.min(limits.maxChunks(), from + limit); List<Receipt> entries = new ArrayList<>();
             for (long i = from; i < end; i++) { Receipt r = receipt(i); if (r != null) entries.add(r); }
-            return new ReceiptPage(transfer.request().transferId(), from, limit, entries, end < limits.maxChunks() ? end : null, state().revision());
+            return new ReceiptPage(transfer.request().transferId(), from, limit, entries, end < limits.maxChunks() ? end : null, count);
         }
         @Override public int readPersisted(long offset, ByteBuffer dst) throws IOException {
             synchronized (this) {

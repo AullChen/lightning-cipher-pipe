@@ -17,3 +17,5 @@
 HTTP 运行时持有唯一活动 `SinkSession`；普通 Chunk、状态及 receipt 请求不关闭它，也不重新分配索引或回放日志。安全终结、切换或运行时关闭才释放会话；真正重开仍执行完整回放和 payload/log 的 force 屏障。
 
 `TransferSink.terminalState(UUID)` 提供不建立第二份索引的历史终态快照。COMPLETED 使用持久结果中的最终计数并检查载荷长度；取消/失败状态通过固定大小记录缓冲读取日志计数。RECOVERY_REQUIRED 的日志无法重建时保留冻结状态，计数为零，不能视为未发生写入。快照不发布恢复 receipt，也不替代 Finish 内容重读。历史终态状态查询及同请求 Open 重放不会挤掉活动会话；需要完整会话的历史 receipt、Chunk、Finish、Cancel 请求在另一个任务活动期间返回 BUSY，待活动任务安全终结后可重试。不会缓存所有历史任务或同时分配多份大索引。
+
+`Status.revision` 仅随状态文件的持久变更递增；`ReceiptPage.revision` 是读取该页时唯一已提交回执的数量，从日志恢复。两者不得比较。分页过程中新增提交可使回执版本增加，状态查询仍从同一索引视图读取已提交块数和字节数。

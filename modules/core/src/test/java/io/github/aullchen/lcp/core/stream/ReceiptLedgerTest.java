@@ -21,6 +21,14 @@ class ReceiptLedgerTest {
         assertEquals(ErrorCode.UNKNOWN_COMMIT,assertThrows(TransferException.class,
                 () -> ledger.reconcile(new ReceiptPage(id,256,14,List.of(),270L,2),256,14,1)).code());
     }
+    @Test void appendedReceiptsMayIncreaseRevisionBetweenPages() throws Exception {
+        var ledger=new ReceiptLedger(id,300,300*52);
+        for (int i=0;i<270;i++) ledger.assign(receipt(i));
+        ledger.reconcile(new ReceiptPage(id,0,256,List.of(receipt(0)),256L,1),0,256,0);
+        ledger.reconcile(new ReceiptPage(id,256,14,List.of(receipt(269)),270L,2),256,14,1);
+        assertEquals(2,ledger.confirmedBytes());
+        assertTrue(ledger.acknowledged(0)); assertTrue(ledger.acknowledged(269));
+    }
     @Test void changedHashOffsetOrLengthCannotReplaceKnownDescriptor() {
         for (var changed : List.of(new Receipt(id,0,1,1,receipt(0).payloadHash()),new Receipt(id,0,0,2,receipt(0).payloadHash()),
                 new Receipt(id,0,0,1,receipt(1).payloadHash()))) {

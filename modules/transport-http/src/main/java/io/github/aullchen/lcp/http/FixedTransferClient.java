@@ -365,7 +365,8 @@ public final class FixedTransferClient implements AutoCloseable {
         return status;
     }
     private void reconcile(URI uri, BoundTransfer context, ReceiptLedger ledger) throws IOException, InterruptedException {
-        long revision = status(uri,context).revision();
+        status(uri,context);
+        long revision = 0; // Only receipt-page revisions share this counter.
         for (long from = 0; from < ledger.assigned();) {
             int limit = (int)Math.min(256,ledger.assigned()-from);
             var page = TransferJson.page(query(URI.create(uri + "/receipts?from=" + from + "&limit=" + limit),context).body());

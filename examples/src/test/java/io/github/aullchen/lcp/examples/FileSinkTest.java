@@ -30,6 +30,29 @@ class FileSinkTest extends StorageTestSupport {
     static Chunk chunk(long index, long offset, byte... data) {
         return new Chunk(index, offset, data.length, MetadataCodec.hash(data), ByteBuffer.wrap(data));
     }
+    @Test void stateAndReceiptRevisionsRemainIndependentAcrossReopenAndTerminalSnapshot() throws Exception {
+        var t=transfer(); var id=t.request().transferId();
+        long terminalRevision;
+        try (var sink=new FileSink(root,4096)) {
+            var s=sink.open(t);
+            assertEquals(0,s.state().revision()); assertEquals(0,s.receipts(0,2).revision());
+            s.commit(chunk(0,0,(byte)1));
+            assertEquals(1,s.state().revision()); assertEquals(1,s.receipts(0,2).revision());
+            s.commit(chunk(1,1,(byte)2));
+            assertEquals(1,s.state().revision()); assertEquals(2,s.receipts(0,2).revision());
+        }
+        try (var sink=new FileSink(root,4096)) {
+            var s=sink.recover(id);
+            assertEquals(1,s.state().revision()); assertEquals(2,s.receipts(0,2).revision());
+            s.cancel(new CancelCommand(id,UUID.randomUUID(),t.response().bindingHash()));
+            terminalRevision=s.state().revision();
+            assertEquals(2,s.receipts(0,2).revision());
+        }
+        try (var sink=new FileSink(root,4096)) {
+            assertEquals(terminalRevision,sink.terminalState(id).revision());
+            assertEquals(2,sink.terminalState(id).committedChunks());
+        }
+    }
     @Test void durableReceiptAndShortWritesSurviveReopen() throws Exception {
         var t = transfer(); var c = chunk(0, 0, (byte) 1, (byte) 2, (byte) 3);
         var shortIo = new FileSink.Io() {

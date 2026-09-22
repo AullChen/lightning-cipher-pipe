@@ -43,12 +43,13 @@ public final class ReceiptLedger {
         if (!acknowledged(r.chunkIndex())) confirmedBytes += r.plainLength();
         slots.put((int)r.chunkIndex()*SLOT+48,(byte)1);
     }
-    /** Missing historical ACKs or changed descriptors stop recovery; an empty sparse page is not EOF. */
-    public void reconcile(ReceiptPage page, long from, int limit, long minimumRevision) throws TransferException {
+    /** Missing historical ACKs or changed descriptors stop recovery; an empty sparse page is not EOF.
+     * The lower bound is a prior receipt-page revision, never the independent state-file revision. */
+    public void reconcile(ReceiptPage page, long from, int limit, long minimumReceiptRevision) throws TransferException {
         long end = from + limit;
         Long next = end < maxChunks ? end : null;
         if (!id.equals(page.transferId()) || page.from() != from || page.limit() != limit || from < 0 || limit < 1
-                || limit > 256 || end > assigned || page.revision() < minimumRevision
+                || limit > 256 || end > assigned || page.revision() < minimumReceiptRevision
                 || !java.util.Objects.equals(next,page.nextFrom())) throw new TransferException(UNKNOWN_COMMIT);
         int entry = 0;
         for (long i = from; i < end; i++) {
