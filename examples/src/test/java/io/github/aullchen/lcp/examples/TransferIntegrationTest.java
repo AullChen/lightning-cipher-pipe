@@ -222,6 +222,30 @@ class TransferIntegrationTest extends StorageTestSupport {
         }
     }
     @ParameterizedTest @ValueSource(booleans={false,true})
+    void cancellationCallbackCanCloseSenderWithoutBlockingWorkerExit(boolean interrupt) throws Exception {
+        var reading=new CountDownLatch(1); var release=new CountDownLatch(1);
+        var closes=new java.util.concurrent.atomic.AtomicInteger();
+        try (var pair=new Pair()) {
+            try {
+                var future=pair.sender.start(pair.endpoint,pair.request(),new TransferSource() {
+                    public int read(ByteBuffer dst) throws IOException {
+                        reading.countDown(); LifecycleStorageTest.await(release); return -1;
+                    }
+                    public void close() { closes.incrementAndGet(); release.countDown(); }
+                }).toCompletableFuture();
+                LifecycleStorageTest.await(reading);
+                var callback=future.handle((result,failure) -> {
+                    assertInstanceOf(CancellationException.class,failure);
+                    try { pair.sender.close(Duration.ofSeconds(2)); return null; }
+                    catch (IOException e) { return e; }
+                });
+                assertTrue(future.cancel(interrupt));
+                assertNull(callback.get(3,TimeUnit.SECONDS));
+                assertEquals(1,closes.get()); assertEquals(0,pair.sourceBudget.used());
+            } finally { release.countDown(); }
+        }
+    }
+    @ParameterizedTest @ValueSource(booleans={false,true})
     void cancelledSendRetainsLeaseUntilConsumerExits(boolean interrupt) throws Exception {
         var sending=new CountDownLatch(1); var release=new CountDownLatch(1);
         var closes=new java.util.concurrent.atomic.AtomicInteger();

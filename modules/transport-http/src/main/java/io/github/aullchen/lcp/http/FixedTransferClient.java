@@ -88,8 +88,9 @@ public final class FixedTransferClient implements AutoCloseable {
             finally { synchronized (this) { runner = null; } }
         }
         @Override public boolean cancel(boolean mayInterruptIfRunning) {
+            // Completing a future can invoke caller callbacks that wait for this worker to exit.
+            if (!super.cancel(mayInterruptIfRunning)) return false;
             synchronized (this) {
-                if (!super.cancel(mayInterruptIfRunning)) return false;
                 if (mayInterruptIfRunning && runner != null) runner.interrupt();
             }
             worker.remove(this);
