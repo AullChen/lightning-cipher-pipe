@@ -132,6 +132,79 @@ class TransferIntegrationTest extends StorageTestSupport {
             assertEquals(State.FAILED,pair.status(old.transferId()).state());
         }
     }
+    @Test void queuedCancellationClosesUnstartedSourceAndRejectionKeepsCallerOwnership() throws Exception {
+        var reading=new CountDownLatch(1); var release=new CountDownLatch(1);
+        var closes=new java.util.concurrent.atomic.AtomicInteger(); var reads=new java.util.concurrent.atomic.AtomicInteger();
+        TransferSource queued=new TransferSource(){
+            public int read(ByteBuffer dst) { reads.incrementAndGet(); return -1; }
+            public void close() { closes.incrementAndGet(); }
+        };
+        try(var pair=new Pair()) {
+            try {
+                var first=pair.sender.start(pair.endpoint,pair.request(),new TransferSource(){
+                    public int read(ByteBuffer dst) throws IOException { reading.countDown(); LifecycleStorageTest.await(release); return -1; }
+                    public void close() { release.countDown(); }
+                }).toCompletableFuture();
+                assertTrue(reading.await(3,TimeUnit.SECONDS));
+                var pending=pair.sender.start(pair.endpoint,pair.request(),queued).toCompletableFuture();
+                var rejectedCloses=new java.util.concurrent.atomic.AtomicInteger();
+                var rejected=new TransferSource(){ public int read(ByteBuffer b){ fail("Rejected source read"); return -1; } public void close(){ rejectedCloses.incrementAndGet(); } };
+                assertThrows(RejectedExecutionException.class,()->pair.sender.start(pair.endpoint,pair.request(),rejected));
+                assertEquals(0,rejectedCloses.get()); rejected.close();
+                assertTrue(pending.cancel(false)); assertEquals(1,closes.get()); assertEquals(0,reads.get());
+                release.countDown(); first.get(5,TimeUnit.SECONDS); pair.sender.close();
+                assertEquals(1,closes.get()); assertEquals(0,pair.sourceBudget.used());
+                assertThrows(RejectedExecutionException.class,()->pair.sender.start(pair.endpoint,pair.request(),queued));
+                assertEquals(1,closes.get());
+            } finally { release.countDown(); }
+        }
+    }
+    @ParameterizedTest @ValueSource(booleans={false,true})
+    void cancellationAfterAcceptanceClosesSourceExactlyOnce(boolean duringRead) throws Exception {
+        var reached=new CountDownLatch(1); var release=new CountDownLatch(1);
+        var closes=new java.util.concurrent.atomic.AtomicInteger(); var reads=new java.util.concurrent.atomic.AtomicInteger();
+        try(var pair=new Pair()) {
+            try {
+                var source=new TransferSource(){
+                    public int read(ByteBuffer dst) throws IOException { reads.incrementAndGet(); reached.countDown(); LifecycleStorageTest.await(release); throw new IOException("Closed read"); }
+                    public void close() { closes.incrementAndGet(); release.countDown(); }
+                };
+                var future=pair.sender.start(pair.endpoint,pair.request(),source,accepted->{
+                    if(!duringRead) { reached.countDown(); LifecycleStorageTest.await(release); }
+                }).toCompletableFuture();
+                assertTrue(reached.await(3,TimeUnit.SECONDS));
+                assertTrue(future.cancel(false)); pair.sender.close();
+                assertEquals(1,closes.get()); assertEquals(duringRead?1:0,reads.get());
+                assertEquals(0,pair.sourceBudget.used()); assertTrue(future.isCancelled());
+            } finally { release.countDown(); }
+        }
+    }
+    @ParameterizedTest @ValueSource(booleans={false,true})
+    void cancelledSendRetainsLeaseUntilConsumerExits(boolean interrupt) throws Exception {
+        var sending=new CountDownLatch(1); var release=new CountDownLatch(1);
+        var closes=new java.util.concurrent.atomic.AtomicInteger();
+        try (var pair=new Pair(new FileSink.Io(){},LIMITS,handler -> (x,source,target) -> {
+            if (x.getRequestURI().getPath().contains("/chunks/")) {
+                sending.countDown(); LifecycleStorageTest.await(release);
+            }
+            handler.handle(x,source,target);
+        })) {
+            TransferSource input=new TransferSource() {
+                boolean read;
+                public int read(ByteBuffer dst) { if (read) return -1; read=true; dst.put((byte)7); return 1; }
+                public void close() { closes.incrementAndGet(); }
+            };
+            var future=pair.sender.start(pair.endpoint,pair.request(),input).toCompletableFuture();
+            try {
+                LifecycleStorageTest.await(sending);
+                assertTrue(future.cancel(interrupt)); assertEquals(1,closes.get());
+                assertThrows(TransferException.class,() -> pair.sender.close(Duration.ofMillis(30)));
+                assertTrue(pair.sourceBudget.used()>0);
+            } finally { release.countDown(); }
+            pair.sender.close();
+            assertEquals(0,pair.sourceBudget.used()); assertEquals(1,closes.get());
+        } finally { release.countDown(); }
+    }
     @ParameterizedTest @ValueSource(strings={"completed","cancelled","expired","recovery-required"})
     void historicalTerminalQueriesDoNotEvictActiveSession(String kind) throws Exception {
         var indexes=new java.util.concurrent.atomic.AtomicInteger();

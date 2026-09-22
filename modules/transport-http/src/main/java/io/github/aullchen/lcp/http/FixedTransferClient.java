@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.net.URI;
 import java.time.*;
 import java.util.UUID;
+import java.util.function.BooleanSupplier;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import static io.github.aullchen.lcp.api.TransferStorage.ErrorCode.*;
@@ -55,18 +56,58 @@ public final class FixedTransferClient implements AutoCloseable {
         return start(endpoint,request,source,ignored -> {});
     }
     public CompletionStage<VerifiedResult> start(URI endpoint, OpenRequest request, TransferSource source, OpenObserver observer) {
-        return CompletableFuture.supplyAsync(() -> {
-            try { return transfer(endpoint, request, source,observer); }
+        var task = new AsyncTransfer(endpoint, request, source, observer);
+        worker.execute(task);
+        return task;
+    }
+    private final class AsyncTransfer extends CompletableFuture<VerifiedResult> implements Runnable {
+        private final URI endpoint;
+        private final OpenRequest request;
+        private final TransferSource source;
+        private final OpenObserver observer;
+        private Thread runner;
+        AsyncTransfer(URI endpoint, OpenRequest request, TransferSource original, OpenObserver observer) {
+            this.endpoint = endpoint; this.request = request; this.observer = observer;
+            var released = new AtomicBoolean();
+            this.source = new TransferSource() {
+                public int read(java.nio.ByteBuffer dst) throws IOException {
+                    if (isCancelled()) throw new TransferException(UNAVAILABLE);
+                    return original.read(dst);
+                }
+                public void close() throws IOException { if (released.compareAndSet(false,true)) original.close(); }
+            };
+        }
+        @Override public void run() {
+            synchronized (this) {
+                if (isCancelled()) return;
+                runner = Thread.currentThread();
+            }
+            try { complete(transfer(endpoint,request,source,observer,this::isCancelled)); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); completeExceptionally(e); }
+            catch (Throwable e) { completeExceptionally(e); }
+            finally { synchronized (this) { runner = null; } }
+        }
+        @Override public boolean cancel(boolean mayInterruptIfRunning) {
+            synchronized (this) {
+                if (!super.cancel(mayInterruptIfRunning)) return false;
+                if (mayInterruptIfRunning && runner != null) runner.interrupt();
+            }
+            worker.remove(this);
+            try { source.close(); }
             catch (IOException e) { throw new CompletionException(e); }
-            catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new CompletionException(e); }
-        }, worker);
+            return true;
+        }
     }
     @FunctionalInterface public interface OpenObserver { void accepted(AcceptedTransfer transfer) throws IOException; }
     public VerifiedResult transfer(URI endpoint, OpenRequest request, TransferSource source) throws IOException, InterruptedException {
         return transfer(endpoint,request,source,ignored -> {});
     }
     public VerifiedResult transfer(URI endpoint, OpenRequest request, TransferSource source, OpenObserver observer) throws IOException, InterruptedException {
-        if (closed) { source.close(); throw new TransferException(UNAVAILABLE); }
+        return transfer(endpoint,request,source,observer,() -> false);
+    }
+    private VerifiedResult transfer(URI endpoint, OpenRequest request, TransferSource source, OpenObserver observer,
+                                    BooleanSupplier cancelled) throws IOException, InterruptedException {
+        if (closed || cancelled.getAsBoolean()) { source.close(); throw new TransferException(UNAVAILABLE); }
         if (!active.compareAndSet(false, true)) { source.close(); throw new TransferException(BUSY); }
         TransferSource original=source; var sourceClosed=new AtomicBoolean();
         source=new TransferSource() {
@@ -77,7 +118,7 @@ public final class FixedTransferClient implements AutoCloseable {
         metrics = new TransferMetrics();
         boolean chunkerOwnsSource = false;
         try {
-            if (closed) throw new TransferException(UNAVAILABLE);
+            if (closed || cancelled.getAsBoolean()) throw new TransferException(UNAVAILABLE);
             if (!"https".equalsIgnoreCase(endpoint.getScheme()) || endpoint.getRawQuery() != null || endpoint.getRawFragment() != null
                     || !TransferHttpHandler.BASE.equals(endpoint.getRawPath()))
                 throw new IllegalArgumentException("Expected transfer HTTPS endpoint");
@@ -98,6 +139,7 @@ public final class FixedTransferClient implements AutoCloseable {
                 if (!context.response().equals(opened)) throw new AuthenticationException();
             }
             observer.accepted(context.stored());
+            live(context,cancelled);
             ChunkCompression codec = CompressionPlan.select(context.accepted().compressionCode(), optionalCodec);
             CompressionPlan.validate(context.accepted().policy(), context.accepted().limits(), codec, budget.capacity());
             long peak = CompressionPlan.peak(context.accepted().limits(), codec);
@@ -113,6 +155,7 @@ public final class FixedTransferClient implements AutoCloseable {
                 chunkerOwnsSource = true;
                 boolean eof = false;
                 while (!eof) {
+                    live(context,cancelled);
                     var parameters = controller == null ? new FeedbackController.Parameters((int)policy.initialChunkBytes(),
                             (int)policy.initialWindow(),policy.initialZstdLevel()) : controller.parameters();
                     int window = Math.min(parameters.window(),capacity);
@@ -131,7 +174,7 @@ public final class FixedTransferClient implements AutoCloseable {
                                 batch.add(new Flight(pending,prepared));
                             } catch (IOException | RuntimeException e) { pending.close(); throw e; }
                         }
-                        settle(sends,batch,ledger,context,sourceTls,targetTls,transferUri,controller);
+                        settle(sends,batch,ledger,context,sourceTls,targetTls,transferUri,controller,cancelled);
                     } finally { for (var flight : batch) flight.pending.close(); }
                     if (chunks.sourceExhausted()) metrics.sourceEof();
                     if (controller != null) {
@@ -142,7 +185,7 @@ public final class FixedTransferClient implements AutoCloseable {
                 finish = chunks.finish(request.transferId(), context.bindingHash(), UUID.randomUUID());
             } finally { sends.shutdown(); }
             try (var lease = budget.reserve(peak)) {
-                return finish(transferUri,context,sourceTls,targetTls,finish,ledger);
+                return finish(transferUri,context,sourceTls,targetTls,finish,ledger,cancelled);
             }
         } finally {
             try { if (!chunkerOwnsSource) source.close(); } finally { metrics.finish(); activeSource=null; active.set(false); synchronized (completion) { completion.notifyAll(); } }
@@ -196,15 +239,15 @@ public final class FixedTransferClient implements AutoCloseable {
         Flight(OrderedChunker.Pending pending, PreparedChunk prepared) { this.pending = pending; this.prepared = prepared; }
     }
     private record Outcome(Flight flight, AuthenticatedHttpClient.Response response, IOException failure) {}
-    private void live(BoundTransfer context) throws TransferException {
-        if (closed) throw new TransferException(UNAVAILABLE);
+    private void live(BoundTransfer context, BooleanSupplier cancelled) throws TransferException {
+        if (closed || cancelled.getAsBoolean()) throw new TransferException(UNAVAILABLE);
         if (!context.accepted().expiresAt().isAfter(clock.instant())) throw new TransferException(EXPIRED);
     }
     private void settle(ExecutorService sends, java.util.List<Flight> batch, ReceiptLedger ledger, BoundTransfer context,
-                        TlsIdentity source, TlsIdentity target, URI uri, FeedbackController controller) throws IOException, InterruptedException {
+                        TlsIdentity source, TlsIdentity target, URI uri, FeedbackController controller, BooleanSupplier cancelled) throws IOException, InterruptedException {
         UUID id = context.accepted().transferId();
         while (batch.stream().anyMatch(f -> !ledger.acknowledged(f.prepared.receipt(id).chunkIndex()))) {
-            live(context);
+            live(context,cancelled);
             int requestedWindow = controller == null ? (int)context.accepted().policy().initialWindow() : controller.parameters().window();
             int effectiveWindow = (int)Math.min(requestedWindow, budget.capacity() / CompressionPlan.peak(context.accepted().limits(),
                     CompressionPlan.select(context.accepted().compressionCode(),optionalCodec)));
@@ -274,6 +317,7 @@ public final class FixedTransferClient implements AutoCloseable {
             }
             if (pressure && controller != null) { decide(controller,null,true); metrics.restartRound(); }
             if (!uncertain) return;
+            live(context,cancelled);
             reconcile(uri,context,ledger);
             boolean unresolved = batch.stream().anyMatch(f -> !ledger.acknowledged(f.prepared.receipt(id).chunkIndex()));
             if (!unresolved) return;
@@ -329,9 +373,9 @@ public final class FixedTransferClient implements AutoCloseable {
         }
     }
     private VerifiedResult finish(URI uri, BoundTransfer context, TlsIdentity source, TlsIdentity target,
-                                  FinishManifest manifest, ReceiptLedger ledger) throws IOException, InterruptedException {
+                                  FinishManifest manifest, ReceiptLedger ledger, BooleanSupplier cancelled) throws IOException, InterruptedException {
         for (int attempt = 1; ; attempt++) {
-            live(context); long retryAfter = 0;
+            live(context,cancelled); long retryAfter = 0;
             try {
                 byte[] frame = HpkeFrames.sealFinish(context,key,source,target,manifest);
                 var response = http.exchange(URI.create(uri + "/finish"),"POST","application/lcp-frame",frame,
@@ -351,6 +395,7 @@ public final class FixedTransferClient implements AutoCloseable {
             if (status.state() == State.COMPLETED) return completed(status,context,manifest);
             long verificationStarted = System.nanoTime();
             while (status.state() == State.VERIFYING) {
+                live(context,cancelled);
                 if (System.nanoTime()-verificationStarted >= Duration.ofMinutes(10).toNanos()) throw new TransferException(UNKNOWN_COMMIT);
                 Thread.sleep(500);
                 status = status(uri,context);

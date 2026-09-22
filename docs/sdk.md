@@ -88,7 +88,7 @@ var result = completion.toCompletableFuture().get();
 System.out.println(result.handleId() + " " + result.totalPlainBytes());
 ```
 
-`start` 接受调用后负责关闭 Source。异步提交被执行器拒绝时，调用方仍负责关闭 Source；宿主应捕获该同步失败并关闭输入。宿主持久恢复还须使用带 OpenObserver 的重载，在首次读取前保存接受事实；仅调用上面片段不提供跨进程恢复。示例的 `SourceControl` 在 Open 前保存意图，在接纳回调保存事实，重启通过 `recover` 查询，详见[生命周期接口](transfer.md)。
+`start` 提交成功后接管 Source，正常结束、失败或取消均只关闭一次；排队时取消不读取 Source。Future 取消仅停止本地发送，不代表目标已持久化 CANCELLED；仍须通过恢复接口确认远端状态。异步提交被执行器拒绝时，调用方仍负责关闭 Source；宿主应捕获该同步失败并关闭输入。宿主持久恢复还须使用带 OpenObserver 的重载，在首次读取前保存接受事实；仅调用上面片段不提供跨进程恢复。示例的 `SourceControl` 在 Open 前保存意图，在接纳回调保存事实，重启通过 `recover` 查询，详见[生命周期接口](transfer.md)。
 
 自定义 `TransferSource` 实现 `read(ByteBuffer)` 和 `close()`：短读/零读取不是 EOF，只有 -1 表示结束；不能保留调用方缓冲，关闭必须在实现所声明的期限内解除阻塞读取。`GeneratorSource` 支持已知长度的生成数据，发送器也能处理未知长度的有限 Source。自定义 Sink 必须履行持久 receipt、幂等、范围与恢复契约，不能以内存成功代替持久 ACK。
 
