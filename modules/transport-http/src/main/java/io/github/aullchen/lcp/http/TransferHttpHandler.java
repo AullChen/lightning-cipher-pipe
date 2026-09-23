@@ -109,9 +109,9 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
                 if (parts.length == 3 && parts[1].equals("chunks") && "PUT".equals(method)) {
                     long index = unsigned(parts[2]);
                     try (var lease = reserve(CompressionPlan.peak(context.accepted().limits(), CompressionPlan.select(context.accepted().compressionCode(), optionalCodec)))) {
-                        byte[] body = frameBody(x, context.accepted().limits(), context.accepted().limits().maxFrameBytes());
-                        byte[] compressed = HpkeFrames.openChunk(context, key, source, target, id, index, ByteBuffer.wrap(body));
-                        var frame = FrameCodec.decode(ByteBuffer.wrap(body), context.accepted().limits());
+                        var body = frameBody(x, context.accepted().limits(), context.accepted().limits().maxFrameBytes());
+                        byte[] compressed = HpkeFrames.openChunk(context, key, source, target, id, index, body);
+                        var frame = body;
                         byte[] aadBytes = new byte[frame.aad().remaining()]; frame.aad().get(aadBytes);
                         var aad = MetadataCodec.decode(aadBytes, ChunkAad.class);
                         if (aad.plainLength() > context.accepted().policy().maxChunkBytes()) throw new TransferException(LIMIT_EXCEEDED);
@@ -136,8 +136,8 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
                 } else if (parts.length == 2 && parts[1].equals("finish") && "POST".equals(method)) {
                     FinishManifest f;
                     try (var lease = reserve(CompressionPlan.peak(context.accepted().limits(), CompressionPlan.select(context.accepted().compressionCode(), optionalCodec)))) {
-                        byte[] body = frameBody(x, context.accepted().limits(), Math.min(8192, context.accepted().limits().maxFrameBytes()));
-                        f = HpkeFrames.openFinish(context, key, source, target, id, ByteBuffer.wrap(body));
+                        var body = frameBody(x, context.accepted().limits(), Math.min(8192, context.accepted().limits().maxFrameBytes()));
+                        f = HpkeFrames.openFinish(context, key, source, target, id, body);
                     }
                     if (session.state().finish() == null) unexpired(context);
                     startVerification(session,f);
@@ -306,13 +306,9 @@ public final class TransferHttpHandler implements AuthenticatedHttpServer.Handle
         encoding(x); String length = one(x, "Content-Length");
         if (length != null && !length.equals("0")) throw new TransferException(INVALID_MESSAGE);
     }
-    private static byte[] frameBody(HttpsExchange x, Limits limits, long max) throws IOException {
+    private static FrameCodec.Frame frameBody(HttpsExchange x, Limits limits, long max) throws IOException {
         long length = bodyLength(x, "application/lcp-frame", max);
-        var frame = FrameCodec.read(x.getRequestBody(), length, limits);
-        return FrameCodec.encode(frame.messageType(), bytes(frame.aad()), bytes(frame.enc()), bytes(frame.ciphertext()), limits);
-    }
-    private static byte[] bytes(ByteBuffer buffer) {
-        byte[] bytes = new byte[buffer.remaining()]; buffer.get(bytes); return bytes;
+        return FrameCodec.read(x.getRequestBody(), length, limits);
     }
     private static long bodyLength(HttpsExchange x, String type, long max) throws TransferException {
         encoding(x);

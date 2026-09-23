@@ -57,7 +57,12 @@ public final class HpkeFrames {
     /** Returns authenticated compressed bytes; decompression and persistence still follow. */
     public static byte[] openChunk(BoundTransfer context, HpkeKey key, TlsIdentity source, TlsIdentity target,
                                     UUID urlTransfer, long urlIndex, ByteBuffer wire) {
-        var frame = FrameCodec.decode(wire, context.accepted().limits());
+        return openChunk(context,key,source,target,urlTransfer,urlIndex,FrameCodec.decode(wire,context.accepted().limits()));
+    }
+    /** Caller keeps frame storage immutable for this synchronous authenticated operation. */
+    public static byte[] openChunk(BoundTransfer context, HpkeKey key, TlsIdentity source, TlsIdentity target,
+                                   UUID urlTransfer, long urlIndex, FrameCodec.Frame frame) {
+        FrameCodec.validate(frame,context.accepted().limits());
         if (frame.messageType() != 0) throw new AuthenticationException();
         byte[] plaintext = decrypt(context, key, source, target, frame);
         var aad = MetadataCodec.decode(bytes(frame.aad()), ChunkAad.class);
@@ -67,7 +72,12 @@ public final class HpkeFrames {
     }
     public static FinishManifest openFinish(BoundTransfer context, HpkeKey key, TlsIdentity source, TlsIdentity target,
                                              UUID urlTransfer, ByteBuffer wire) {
-        var frame = FrameCodec.decode(wire, context.accepted().limits());
+        return openFinish(context,key,source,target,urlTransfer,FrameCodec.decode(wire,context.accepted().limits()));
+    }
+    /** Caller keeps frame storage immutable for this synchronous authenticated operation. */
+    public static FinishManifest openFinish(BoundTransfer context, HpkeKey key, TlsIdentity source, TlsIdentity target,
+                                            UUID urlTransfer, FrameCodec.Frame frame) {
+        FrameCodec.validate(frame,context.accepted().limits());
         if (frame.messageType() != 1) throw new AuthenticationException();
         byte[] plaintext = decrypt(context, key, source, target, frame);
         var aad = MetadataCodec.decode(bytes(frame.aad()), FinishAad.class);

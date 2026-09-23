@@ -44,6 +44,16 @@ public final class FrameCodec {
         return new Prefix(type, (int) aad, (int) cipher, (int) total);
     }
 
+    /** Recheck a caller-supplied frame without copying or re-encoding its ciphertext. */
+    public static void validate(Frame frame, Limits limits) {
+        int aad=frame.aad().remaining(), enc=frame.enc().remaining(), cipher=frame.ciphertext().remaining();
+        if (enc!=32 || frame.messageType()<0 || frame.messageType()>1) throw ProtocolException.invalid();
+        var header=ByteBuffer.allocate(PREFIX_BYTES).order(ByteOrder.BIG_ENDIAN);
+        header.putInt(MAGIC).put((byte)1).put((byte)frame.messageType()).putInt(aad).putShort((short)enc).putInt(cipher).flip();
+        Prefix p=prefix(header,(long)PREFIX_BYTES+aad+enc+cipher,limits);
+        checkAad(p,frame.aad(),limits);
+    }
+
     public static Frame decode(ByteBuffer input, Limits limits) {
         var b = input.slice().order(ByteOrder.BIG_ENDIAN);
         if (b.remaining() < PREFIX_BYTES) throw ProtocolException.invalid();

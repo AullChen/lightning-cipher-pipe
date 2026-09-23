@@ -49,3 +49,5 @@ RSS is sampled every 50 ms and includes the OS process high-water mark where ava
 ## Large index boundary checks
 
 `python benchmarks/index_scale.py` runs separate 65,536- and 1,000,000-slot storage checks under a 256 MiB JVM heap limit after building the benchmark profile. It constructs a deterministic near-full journal fixture, then uses the real FileSink recovery/commit and source receipt reconciliation paths. It verifies exact metadata budgets, last-slot idempotence, explicit overflow refusal, full-index reopening and payload bytes. It is not a million-request network benchmark. Results and scope are in the [index report](../docs/experiments/index-scale-v1/README.md). Generated fixtures remain under ignored results; a new `--output` directory is required for another run.
+
+`FrameAllocationRun` 是独立帧转换分配诊断，不运行吞吐矩阵；方法、参数、每端分配/峰值工作集与窗口见[诊断报告](../docs/experiments/frame-allocation-v1/README.md)。

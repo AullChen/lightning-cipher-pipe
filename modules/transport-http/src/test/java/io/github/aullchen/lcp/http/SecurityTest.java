@@ -32,6 +32,17 @@ class SecurityTest {
     static TlsIdentity target() { return TlsIdentity.certificate(targetCert.certificate(), TlsIdentity.Role.SERVER); }
     static BoundTransfer bound(PeerDirectory directory) { var r = request(); return BoundTransfer.freeze(r, accepted(r), source(), target(), directory, Instant.now()); }
     static ChunkAad aad(BoundTransfer b) { return new ChunkAad(ID, b.bindingHash(), 0, 0, 3, 3, 0); }
+    @Test void streamedFramePathAuthenticatesAndRejectsMalformedViews() throws Exception {
+        var b=bound(directory()); var wire=HpkeFrames.sealChunk(b,sourceKey,source(),target(),aad(b),new byte[]{0,1,2});
+        var frame=FrameCodec.read(new java.io.ByteArrayInputStream(wire),wire.length,LIMITS);
+        assertArrayEquals(new byte[]{0,1,2},HpkeFrames.openChunk(b,targetKey,source(),target(),ID,0,frame));
+        var cipher=bytes(frame.ciphertext()); cipher[0]^=1;
+        assertThrows(AuthenticationException.class,() -> HpkeFrames.openChunk(b,targetKey,source(),target(),ID,0,
+                new FrameCodec.Frame(0,frame.aad(),frame.enc(),ByteBuffer.wrap(cipher))));
+        assertThrows(ProtocolException.class,() -> HpkeFrames.openChunk(b,targetKey,source(),target(),ID,0,
+                new FrameCodec.Frame(0,frame.aad(),ByteBuffer.allocate(31),frame.ciphertext())));
+        assertThrows(AuthenticationException.class,() -> HpkeFrames.openChunk(b,targetKey,source(),target(),ID,1,frame));
+    }
     @Test void chunkAndFinishUseAuthenticatedProjectContext() {
         var b = bound(directory()); var wire = HpkeFrames.sealChunk(b, sourceKey, source(), target(), aad(b), new byte[]{0,1,2});
         assertArrayEquals(new byte[]{0,1,2}, HpkeFrames.openChunk(b, targetKey, source(), target(), ID, 0, ByteBuffer.wrap(wire)));
