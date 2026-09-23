@@ -7,7 +7,16 @@ public final class FeedbackController {
     public record Parameters(int chunkBytes, int window, int zstdLevel) {}
     private final Policy policy;
     private Parameters current, previous;
-    private int dimension, rounds, cooldown;
+    private int dimension, rounds, cooldown, trialDimension;
+    private final long[][] trials=new long[3][5];
+    public record TrialCounts(long started,long evaluated,long retained,long rolledBack,long interrupted) {}
+    public record Diagnostics(TrialCounts window,TrialCounts compression,TrialCounts chunk) {
+        public static Diagnostics empty() { var zero=new TrialCounts(0,0,0,0,0); return new Diagnostics(zero,zero,zero); }
+    }
+    private TrialCounts counts(int dimension) {
+        var c=trials[dimension]; return new TrialCounts(c[0],c[1],c[2],c[3],c[4]);
+    }
+    public Diagnostics diagnostics() { return new Diagnostics(counts(0),counts(1),counts(2)); }
     private double baselineGoodput;
     private long baselineP95, trialBytes, trialNanos;
     private boolean budgetFailure;
@@ -23,7 +32,7 @@ public final class FeedbackController {
     /** Authenticated BUSY may interrupt before enough valid ACKs exist for a round. */
     public void pressure() {
         if (policy.mode() == 0) return;
-        if (previous != null) current = previous;
+        if (previous != null) { trials[trialDimension][4]++; current = previous; }
         current = new Parameters(current.chunkBytes(), Math.max((int)policy.minWindow(), current.window()/2), current.zstdLevel());
         previous = null; cooldown = 2;
     }
@@ -37,7 +46,9 @@ public final class FeedbackController {
             budgetFailure |= r.budgetFailures() > 0;
             if (++rounds == 2) {
                 double goodput = trialBytes * 1_000_000_000.0 / trialNanos;
-                if (goodput < baselineGoodput * 1.05 || r.ackP95Nanos() > baselineP95 * 1.2 || budgetFailure) current = previous;
+                boolean rollback=goodput < baselineGoodput * 1.05 || r.ackP95Nanos() > baselineP95 * 1.2 || budgetFailure;
+                trials[trialDimension][1]++; trials[trialDimension][rollback?3:2]++;
+                if (rollback) current = previous;
                 previous = null; cooldown = 2;
             }
             return current;
@@ -48,6 +59,7 @@ public final class FeedbackController {
             Parameters candidate = candidate(next, r);
             if (!candidate.equals(current)) {
                 previous = current; current = candidate;
+                trialDimension=next; trials[next][0]++;
                 baselineGoodput = r.goodput(); baselineP95 = r.ackP95Nanos();
                 trialBytes = trialNanos = 0; rounds = 0; budgetFailure = false;
                 break;

@@ -389,6 +389,7 @@ public final class FixedTransferClient implements AutoCloseable {
     private void decide(FeedbackController controller, TransferMetrics.Round round, boolean pressure) {
         boolean trial = controller.trialActive(); var old = controller.parameters(); long start = System.nanoTime();
         if (pressure) controller.pressure(); else controller.observe(round);
+        metrics.feedback(controller.diagnostics());
         metrics.decision(!trial && controller.trialActive(), trial && !controller.trialActive()
                 && (pressure || !old.equals(controller.parameters())), System.nanoTime()-start);
     }

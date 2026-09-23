@@ -54,7 +54,8 @@ public final class BenchmarkRun {
                 new PeerDirectory.Entry("target","target-key",Set.of("bench"),targetKey.publicSpki())));
         var io=new FileSink.Io() {
             public void after(FileSink.Boundary boundary) throws IOException {
-                if (scenario.equals("sink") && boundary==FileSink.Boundary.PAYLOAD_WRITTEN) {
+                if (scenario.equals("sink") && boundary==FileSink.Boundary.PAYLOAD_WRITTEN
+                        || scenario.equals("journal") && boundary==FileSink.Boundary.RECEIPT_WRITTEN) {
                     try { Thread.sleep(training?80:160); } catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IOException(e); }
                 }
             }
@@ -93,6 +94,14 @@ public final class BenchmarkRun {
             result.put("confirmedBytes",m.confirmedBytes()); result.put("attempts",m.attempts()); result.put("retries",m.retries());
             result.put("busy",m.busy()); result.put("budgetFailures",m.budgetFailures()); result.put("samples",m.samples());
             result.put("ackP95Nanos",m.ackP95Nanos()); result.put("queueShare",m.queueShare());
+            result.put("persistShare",m.persistShare()); result.put("effectiveFinalWindow",m.effectiveWindow());
+            var dimensions=Map.of("window",m.feedback().window(),"compression",m.feedback().compression(),"chunk",m.feedback().chunk());
+            for (var entry:dimensions.entrySet()) {
+                var prefix=entry.getKey()+"Trials"; var c=entry.getValue();
+                result.put(prefix+"Started",c.started()); result.put(prefix+"Evaluated",c.evaluated());
+                result.put(prefix+"Retained",c.retained()); result.put(prefix+"RolledBack",c.rolledBack());
+                result.put(prefix+"Interrupted",c.interrupted());
+            }
             result.put("compressedBytes",m.compressedBytes()); result.put("compressionNanos",m.compressionNanos()); result.put("sealNanos",m.sealNanos());
             result.put("sentFrameBytes",m.sentFrameBytes()); result.put("retriedFrameBytes",m.retriedFrameBytes());
             result.put("decisions",m.decisions()); result.put("trials",m.trials()); result.put("rollbacks",m.rollbacks()); result.put("decisionNanos",m.decisionNanos());

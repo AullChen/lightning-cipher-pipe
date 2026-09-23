@@ -14,7 +14,9 @@ public final class TransferMetrics {
     private int inFlight, window = 1, size, cursor, valid;
     private boolean blocked, eof;
     private final long[] ack = new long[SAMPLE_CAPACITY];
-    private final double[] queue = new double[SAMPLE_CAPACITY];
+    private final double[] queue = new double[SAMPLE_CAPACITY], persist = new double[SAMPLE_CAPACITY];
+    private FeedbackController.Diagnostics feedback=FeedbackController.Diagnostics.empty();
+    public synchronized void feedback(FeedbackController.Diagnostics value) { feedback=java.util.Objects.requireNonNull(value); }
     private long confirmed, roundConfirmed, plain, compressed, compressionNanos, sealNanos;
     private long attempts, retries, busy, budgetFailures, roundRetries, roundBusy, roundBudget;
     private long sentFrameBytes, retriedFrameBytes, decisions, trials, rollbacks, decisionNanos;
@@ -67,6 +69,7 @@ public final class TransferMetrics {
                 || queueMicros < 0 || persistMicros < 0
                 || queueMicros > durationNanos / 1000 || persistMicros > durationNanos / 1000 - queueMicros) return;
         ack[cursor] = durationNanos; queue[cursor] = queueMicros * 1000.0 / durationNanos;
+        persist[cursor] = persistMicros * 1000.0 / durationNanos;
         cursor = (cursor + 1) % SAMPLE_CAPACITY; size = Math.min(SAMPLE_CAPACITY, size + 1); valid++;
     }
     private Long p95() {
@@ -74,17 +77,17 @@ public final class TransferMetrics {
         long[] values = Arrays.copyOf(ack, size); Arrays.sort(values);
         return values[(int)Math.ceil(.95 * size) - 1];
     }
-    private Double queueMedian() {
+    private Double median(double[] samples) {
         if (size == 0) return null;
-        double[] values = Arrays.copyOf(queue, size); Arrays.sort(values);
+        double[] values = Arrays.copyOf(samples, size); Arrays.sort(values);
         return size % 2 == 1 ? values[size / 2] : (values[size / 2 - 1] + values[size / 2]) / 2;
     }
     public record Snapshot(long elapsedNanos, long confirmedBytes, long attempts, long retries, long busy,
                            long budgetFailures, long plainBytes, long compressedBytes, long compressionNanos,
-                           long sealNanos, long windowFullNanos, long budgetBlockedNanos, int samples, Long ackP95Nanos, Double queueShare, long sentFrameBytes, long retriedFrameBytes, long decisions, long trials, long rollbacks, long decisionNanos) {}
+                           long sealNanos, long windowFullNanos, long budgetBlockedNanos, int samples, Long ackP95Nanos, Double queueShare, long sentFrameBytes, long retriedFrameBytes, long decisions, long trials, long rollbacks, long decisionNanos, Double persistShare, int effectiveWindow, FeedbackController.Diagnostics feedback) {}
     public synchronized Snapshot snapshot() {
         return new Snapshot(tick() - started, confirmed, attempts, retries, busy, budgetFailures,
-                totalPlain, totalCompressed, totalCompression, sealNanos, totalFullNanos, totalBudgetNanos, size, p95(), queueMedian(), sentFrameBytes, retriedFrameBytes, decisions, trials, rollbacks, decisionNanos);
+                totalPlain, totalCompressed, totalCompression, sealNanos, totalFullNanos, totalBudgetNanos, size, p95(), median(queue), sentFrameBytes, retriedFrameBytes, decisions, trials, rollbacks, decisionNanos, median(persist), window, feedback);
     }
     public record Round(long elapsedNanos, long confirmedBytes, int validSamples, Long ackP95Nanos, Double queueShare,
                         double compressionBusy, Double wireRatio, double windowFullShare, boolean sourceEof,
@@ -95,7 +98,7 @@ public final class TransferMetrics {
     public synchronized Round pollRound() {
         long now = tick(), elapsed = now - roundStarted;
         if (valid < 16 || elapsed < 2_000_000_000L) return null;
-        Round result = new Round(elapsed, roundConfirmed, valid, p95(), queueMedian(),
+        Round result = new Round(elapsed, roundConfirmed, valid, p95(), median(queue),
                 Math.min(1, compressionNanos / (double)elapsed), plain == 0 ? null : compressed / (double)plain,
                 fullNanos / (double)elapsed, eof, budgetNanos > 0 || blocked, roundRetries, roundBusy, roundBudget);
         restartRound();

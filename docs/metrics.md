@@ -11,3 +11,11 @@
 指标不包含明文内容、密钥、路径或逐块历史。阶段观测不构成性能收益结论。
 
 快照还记录 Chunk 请求的加密帧字节、其中属于重试请求的帧字节，以及决策次数、试探次数、回退次数和决策耗时。帧字节按提交给 HTTP 的完整帧计量，可能包含未完全发送的请求；不是 TCP 重传量或抓包流量。实验代理另行统计实际转发的 TLS 字节。决策计数和耗时均采用固定大小聚合，不保存逐轮历史。
+
+## 压力与试探诊断
+
+`persistShare` 是同一批最多 64 条有效 ACK 的持久提交耗时占比中位数，与 `queueShare` 使用相同的有效性过滤。它包含提交内部锁等待，不能单独归因为磁盘速度。该观测只用于诊断，policyVersion 1 的决策输入和阈值保持不变。`effectiveWindow` 返回最近应用的物理窗口；累计预算受限时间仍单独记录。
+
+`feedback` 按 window、compression、chunk 三维分别返回 started、evaluated、retained、rolledBack、interrupted。evaluated 只在完整两轮评估结束时递增，且等于 retained + rolledBack；压力提前撤销记录为 interrupted，不冒充完成评估。started − evaluated − interrupted 表示尚在进行的试探。所有计数为固定大小聚合，快照不暴露可变数组；原有 trials/rollbacks 保留兼容口径。
+
+受控正常/慢提交/日志锁竞争样本与真实长传输的范围见[反馈诊断报告](experiments/feedback-diagnostics-v1/README.md)。这些信号不证明联合控制取得吞吐收益。

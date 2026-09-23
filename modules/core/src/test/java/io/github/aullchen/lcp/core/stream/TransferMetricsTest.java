@@ -45,6 +45,17 @@ class TransferMetricsTest {
         assertEquals(.1,round.queueShare()); assertEquals(1,round.retries()); assertEquals(1,round.busy());
         assertEquals(100, metrics.snapshot().confirmedBytes()); assertNull(metrics.pollRound());
     }
+    @Test void persistencePressureIsObservableWithoutChangingQueueSignal() {
+        var normal=new TransferMetrics(); var slow=new TransferMetrics();
+        normal.acknowledged(1000000,0L,100L,false,false);
+        slow.acknowledged(1000000,0L,900L,false,false);
+        assertEquals(normal.snapshot().queueShare(),slow.snapshot().queueShare());
+        assertEquals(.1,normal.snapshot().persistShare()); assertEquals(.9,slow.snapshot().persistShare());
+        slow.acknowledged(1000000,0L,100L,true,false);
+        slow.acknowledged(1000000,null,100L,false,false);
+        assertEquals(1,slow.snapshot().samples()); assertEquals(.9,slow.snapshot().persistShare());
+        slow.window(2,true); assertEquals(2,slow.snapshot().effectiveWindow());
+    }
     @Test void compressionTimingExcludesInputCopy() throws Exception {
         var time=new AtomicLong(10);
         var codec=new ChunkCompression() {

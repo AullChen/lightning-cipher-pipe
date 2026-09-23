@@ -54,6 +54,23 @@ class FeedbackControllerTest {
         c.observe(normal(1200));
         assertEquals(new FeedbackController.Parameters(2097152,5,4),c.parameters());
     }
+    @Test void diagnosticsDistinguishEvaluationRollbackAndInterruptedTrialsAcrossDimensions() {
+        var c=new FeedbackController(policy());
+        c.observe(normal(1000)); c.observe(normal(1100));
+        assertEquals(0,c.diagnostics().window().evaluated());
+        c.observe(normal(1100));
+        assertEquals(new FeedbackController.TrialCounts(1,1,1,0,0),c.diagnostics().window());
+        c.observe(normal(1100)); c.observe(normal(1100));
+        c.observe(normal(1100)); c.observe(normal(1000)); c.observe(normal(1000));
+        assertEquals(new FeedbackController.TrialCounts(1,1,0,1,0),c.diagnostics().compression());
+        c.observe(normal(1000)); c.observe(normal(1000)); c.observe(normal(1000));
+        c.observe(normal(1100)); c.observe(normal(1100));
+        assertEquals(new FeedbackController.TrialCounts(1,1,1,0,0),c.diagnostics().chunk());
+        c.observe(normal(1100)); c.observe(normal(1100)); c.observe(normal(1100));
+        c.pressure();
+        assertEquals(new FeedbackController.TrialCounts(2,1,1,0,1),c.diagnostics().window());
+        c.pressure(); assertEquals(1,c.diagnostics().window().interrupted());
+    }
     @Test void combinedGoodputUsesCombinedTimeNotAverageOfRates() {
         var c=new FeedbackController(policy()); c.observe(normal(1000));
         c.observe(normal(2000));

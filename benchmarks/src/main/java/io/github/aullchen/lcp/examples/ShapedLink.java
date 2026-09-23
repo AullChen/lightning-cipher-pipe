@@ -25,7 +25,7 @@ final class ShapedLink implements AutoCloseable {
     final AtomicLong upstream = new AtomicLong(), downstream = new AtomicLong();
     final AtomicInteger disconnects = new AtomicInteger();
     ShapedLink(int target, String scenario, boolean training) throws IOException {
-        if (!Set.of("stable","step","rtt","sink","outage").contains(scenario)) throw new IllegalArgumentException("Unknown trace");
+        if (!Set.of("stable","step","rtt","sink","journal","outage").contains(scenario)) throw new IllegalArgumentException("Unknown trace");
         this.target=target; this.scenario=scenario; this.training=training;
         listener = new ServerSocket(); listener.bind(new InetSocketAddress("127.0.0.1",0));
         acceptor = new Thread(this::accept,"benchmark-link"); acceptor.start();
