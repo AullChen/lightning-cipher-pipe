@@ -91,7 +91,7 @@ public final class TransferMetrics {
                         boolean budgetBlocked, long retries, long busy, long budgetFailures) {
         public double goodput() { return elapsedNanos > 0 ? confirmedBytes * 1_000_000_000.0 / elapsedNanos : 0; }
     }
-    /** One fixed compression worker; call at a drained batch boundary. Null means keep collecting. */
+    /** One fixed compression worker; call after processing completed sends. Null means keep collecting. */
     public synchronized Round pollRound() {
         long now = tick(), elapsed = now - roundStarted;
         if (valid < 16 || elapsed < 2_000_000_000L) return null;

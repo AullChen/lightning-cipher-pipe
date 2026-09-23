@@ -366,6 +366,30 @@ class TransferIntegrationTest extends StorageTestSupport {
             assertEquals(0,pair.sourceBudget.used()); assertEquals(0,pair.targetBudget.used());
         }
     }
+    @ParameterizedTest @ValueSource(booleans={false,true})
+    void completedSlotRefillsWhileFirstChunkRemainsBlocked(boolean feedback) throws Exception {
+        var first=new CountDownLatch(1); var third=new CountDownLatch(1); var release=new CountDownLatch(1);
+        var bounds=new Limits(300000,262144,128,16777216,2);
+        try (var pair=new Pair(new FileSink.Io(){},bounds,handler -> (x,source,target) -> {
+            var path=x.getRequestURI().getPath();
+            if (path.endsWith("/chunks/0")) { first.countDown(); LifecycleStorageTest.await(release); }
+            if (path.endsWith("/chunks/2")) third.countDown();
+            handler.handle(x,source,target);
+        })) {
+            var old=requestWith(pair,bounds,262144,2);
+            var policy=feedback?new Policy(1,1,262144,262144,262144,1,2,2,1,1,1):old.policy();
+            var request=new OpenRequest(old.transferId(),old.routeId(),old.sourceNodeId(),old.targetNodeId(),old.sourceChallenge(),
+                    old.sourceKeyId(),old.sourcePublicKeyHash(),old.targetKeyId(),old.targetPublicKeyHash(),List.of(0),policy,bounds,old.createdAt(),old.expiresAt());
+            var future=pair.sender.start(pair.endpoint,request,new GeneratorSource(3*262144,42)).toCompletableFuture();
+            try { LifecycleStorageTest.await(first); assertTrue(third.await(3,TimeUnit.SECONDS)); }
+            finally { release.countDown(); }
+            var result=future.get(5,TimeUnit.SECONDS); assertEquals(3,result.totalChunks());
+            byte[] expected=new byte[3*262144]; var random=new SplittableRandom(42);
+            for (int i=0;i<expected.length;i++) expected[i]=(byte)random.nextInt(256);
+            assertArrayEquals(expected,Files.readAllBytes(root.resolve(request.transferId()+"/payload.bin")));
+            assertEquals(0,pair.sourceBudget.used()); assertEquals(0,pair.targetBudget.used());
+        } finally { release.countDown(); }
+    }
     @Test void concurrentWindowCompletesWithSourceOrderRoot() throws Exception {
         var bounds = new Limits(300000, 262144, 128, 16 * 1024 * 1024, 3);
         CountDownLatch writes = new CountDownLatch(3);
@@ -458,6 +482,7 @@ class TransferIntegrationTest extends StorageTestSupport {
         var bounds = new Limits(300000,262144,128,16*1024*1024,3);
         var attempts = new java.util.concurrent.atomic.AtomicIntegerArray(3);
         var firstFrames = new java.util.concurrent.ConcurrentHashMap<Integer,byte[]>();
+        var initialAttempts = new CountDownLatch(3);
         var reads = new java.util.concurrent.atomic.AtomicInteger();
         var activeWrites = new java.util.concurrent.atomic.AtomicInteger();
         var maxWrites = new java.util.concurrent.atomic.AtomicInteger();
@@ -477,7 +502,8 @@ class TransferIntegrationTest extends StorageTestSupport {
                 if (index < 3) {
                     byte[] frame = x.getRequestBody().readAllBytes();
                     if (attempts.incrementAndGet(index) == 1) {
-                        firstFrames.put(index,frame); byte[] error = TransferJson.error(ErrorCode.BUSY);
+                        firstFrames.put(index,frame); initialAttempts.countDown(); LifecycleStorageTest.await(initialAttempts);
+                        byte[] error = TransferJson.error(ErrorCode.BUSY);
                         x.getResponseHeaders().set("Retry-After","0"); x.sendResponseHeaders(429,error.length); x.getResponseBody().write(error); return;
                     }
                     assertEquals(3,reads.get()); assertFalse(Arrays.equals(firstFrames.get(index),frame));

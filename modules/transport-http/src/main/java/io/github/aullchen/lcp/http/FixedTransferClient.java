@@ -154,35 +154,7 @@ public final class FixedTransferClient implements AutoCloseable {
             try (var chunks = new OrderedChunker(source, Math.toIntExact(context.accepted().policy().initialChunkBytes()),
                     context.accepted().limits(), budget, peak, Duration.ofSeconds(10), capacity)) {
                 chunkerOwnsSource = true;
-                boolean eof = false;
-                while (!eof) {
-                    live(context,cancelled);
-                    var parameters = controller == null ? new FeedbackController.Parameters((int)policy.initialChunkBytes(),
-                            (int)policy.initialWindow(),policy.initialZstdLevel()) : controller.parameters();
-                    int window = Math.min(parameters.window(),capacity);
-                    metrics.window(window, window < parameters.window());
-                    var batch = new java.util.ArrayList<Flight>(window);
-                    try {
-                        for (int i = 0; i < window; i++) {
-                            OrderedChunker.Pending pending;
-                            try { pending = chunks.next(parameters.chunkBytes()); }
-                            catch (IllegalStateException e) { metrics.budgetFailure(); throw e; }
-                            if (pending == null) { eof = true; metrics.sourceEof(); break; }
-                            try {
-                                var prepared = new PreparedChunk(pending.chunk(), codec, parameters.zstdLevel());
-                                metrics.prepared(pending.chunk().plainLength(), prepared.compressedLength(), prepared.compressionNanos());
-                                ledger.assign(prepared.receipt(request.transferId()));
-                                batch.add(new Flight(pending,prepared));
-                            } catch (IOException | RuntimeException e) { pending.close(); throw e; }
-                        }
-                        settle(sends,batch,ledger,context,sourceTls,targetTls,transferUri,controller,cancelled);
-                    } finally { for (var flight : batch) flight.pending.close(); }
-                    if (chunks.sourceExhausted()) metrics.sourceEof();
-                    if (controller != null) {
-                        var round = metrics.pollRound();
-                        if (round != null) decide(controller,round,false);
-                    }
-                }
+                pipeline(sends,chunks,capacity,codec,ledger,context,sourceTls,targetTls,transferUri,controller,cancelled);
                 finish = chunks.finish(request.transferId(), context.bindingHash(), UUID.randomUUID());
             } finally { sends.shutdown(); }
             try (var lease = budget.reserve(peak)) {
@@ -244,8 +216,105 @@ public final class FixedTransferClient implements AutoCloseable {
         if (closed || cancelled.getAsBoolean()) throw new TransferException(UNAVAILABLE);
         if (!context.accepted().expiresAt().isAfter(clock.instant())) throw new TransferException(EXPIRED);
     }
+    private void pipeline(ExecutorService sends, OrderedChunker chunks, int capacity, ChunkCompression codec,
+                          ReceiptLedger ledger, BoundTransfer context, TlsIdentity source, TlsIdentity target, URI uri,
+                          FeedbackController controller, BooleanSupplier cancelled) throws IOException, InterruptedException {
+        var completed=new ExecutorCompletionService<Outcome>(sends);
+        var flights=new java.util.ArrayList<Flight>(capacity);
+        var futures=new java.util.HashMap<Future<Outcome>,Flight>();
+        var policy=context.accepted().policy();
+        boolean eof=false;
+        try {
+            while (!eof || !flights.isEmpty()) {
+                live(context,cancelled);
+                var parameters=controller==null ? new FeedbackController.Parameters((int)policy.initialChunkBytes(),
+                        (int)policy.initialWindow(),policy.initialZstdLevel()) : controller.parameters();
+                int window=Math.min(parameters.window(),capacity);
+                metrics.window(window,window<parameters.window());
+                // Observe already completed failures before preparing more input.
+                Future<Outcome> done=completed.poll();
+                if (done==null && !eof && flights.size()<window) {
+                    OrderedChunker.Pending pending;
+                    try { pending=chunks.next(parameters.chunkBytes()); }
+                    catch (IllegalStateException e) { metrics.budgetFailure(); throw e; }
+                    if (chunks.sourceExhausted()) { eof=true; metrics.sourceEof(); }
+                    if (pending==null) { eof=true; metrics.sourceEof(); continue; }
+                    try {
+                        var prepared=new PreparedChunk(pending.chunk(),codec,parameters.zstdLevel());
+                        metrics.prepared(pending.chunk().plainLength(),prepared.compressedLength(),prepared.compressionNanos());
+                        ledger.assign(prepared.receipt(context.request().transferId()));
+                        var flight=new Flight(pending,prepared); flights.add(flight); flight.attempts++;
+                        futures.put(completed.submit(() -> send(flight,context,source,target,uri)),flight);
+                    } catch (IOException | RuntimeException e) { pending.close(); throw e; }
+                    continue;
+                }
+                if (done==null) {
+                    if (flights.isEmpty()) continue;
+                    done=completed.take();
+                }
+                Outcome outcome=result(done); futures.remove(done);
+                if (outcome.failure!=null || outcome.response.status()<200 || outcome.response.status()>=300) {
+                    var outcomes=new java.util.ArrayList<Outcome>(); outcomes.add(outcome);
+                    while (!futures.isEmpty()) {
+                        var future=completed.take(); outcomes.add(result(future)); futures.remove(future);
+                    }
+                    settle(sends,flights,ledger,context,source,target,uri,controller,cancelled,outcomes);
+                    for (var flight : flights) flight.pending.close();
+                    flights.clear();
+                } else {
+                    ledger.acknowledge(TransferJson.ack(outcome.response.body()).receipt());
+                    metrics.confirmed(ledger.confirmedBytes());
+                    outcome.flight.pending.close(); flights.remove(outcome.flight);
+                }
+                if (controller!=null) {
+                    var round=metrics.pollRound(); if (round!=null) decide(controller,round,false);
+                }
+            }
+        } finally {
+            // Cancellation or a failed read cannot revoke buffers still owned by send workers.
+            boolean interrupted=Thread.interrupted();
+            for (var future : futures.keySet()) while (true) {
+                try { future.get(); break; }
+                catch (InterruptedException e) { interrupted=true; }
+                catch (ExecutionException e) { break; }
+            }
+            for (var flight : flights) flight.pending.close();
+            if (interrupted) Thread.currentThread().interrupt();
+        }
+    }
+    private static Outcome result(Future<Outcome> future) throws IOException, InterruptedException {
+        try { return future.get(); }
+        catch (ExecutionException e) { throw new IOException("Chunk worker failed",e.getCause()); }
+    }
+    private Outcome send(Flight flight, BoundTransfer context, TlsIdentity source, TlsIdentity target, URI uri)
+            throws InterruptedException {
+        UUID id=context.accepted().transferId();
+        try {
+            long sealStart = System.nanoTime();
+            byte[] frame = HpkeFrames.sealChunk(context,key,source,target,flight.prepared.aad(id,context.bindingHash()),flight.prepared.compressedBytes());
+            metrics.sealed(System.nanoTime() - sealStart);
+            metrics.beginAttempt(flight.attempts > 1);
+            try {
+                metrics.sent(frame.length,flight.attempts > 1);
+                long sent = System.nanoTime();
+                var response = http.exchange(URI.create(uri + "/chunks/" + flight.prepared.receipt(id).chunkIndex()),"PUT","application/lcp-frame",frame,
+                        context.request().targetNodeId(),context.request().routeId(),directory,MetadataCodec.CONTROL_LIMIT);
+                context.checkWriter(response.source(),response.target());
+                try { success(response); }
+                catch (TransferException e) {
+                    if (e.code() == BUSY) metrics.busy();
+                    return new Outcome(flight,response,null);
+                }
+                var ack = TransferJson.ack(response.body());
+                if (!flight.prepared.receipt(id).equals(ack.receipt())) throw new AuthenticationException();
+                metrics.acknowledged(System.nanoTime() - sent, ack.queueMicros(), ack.persistMicros(),
+                        flight.attempts > 1, !"APPLIED".equals(ack.disposition()));
+                return new Outcome(flight,response,null);
+            } finally { metrics.endAttempt(); }
+        } catch (IOException e) { return new Outcome(flight,null,e); }
+    }
     private void settle(ExecutorService sends, java.util.List<Flight> batch, ReceiptLedger ledger, BoundTransfer context,
-                        TlsIdentity source, TlsIdentity target, URI uri, FeedbackController controller, BooleanSupplier cancelled) throws IOException, InterruptedException {
+                        TlsIdentity source, TlsIdentity target, URI uri, FeedbackController controller, BooleanSupplier cancelled, java.util.List<Outcome> initial) throws IOException, InterruptedException {
         UUID id = context.accepted().transferId();
         while (batch.stream().anyMatch(f -> !ledger.acknowledged(f.prepared.receipt(id).chunkIndex()))) {
             live(context,cancelled);
@@ -256,51 +325,33 @@ public final class FixedTransferClient implements AutoCloseable {
             var admission = new Semaphore(effectiveWindow);
             var futures = new java.util.ArrayList<Future<Outcome>>(batch.size());
             var outcomes = new java.util.ArrayList<Outcome>(batch.size());
-            try {
-                for (var flight : batch) {
-                    if (ledger.acknowledged(flight.prepared.receipt(id).chunkIndex())) continue;
-                    flight.attempts++;
-                    futures.add(sends.submit(() -> {
-                        admission.acquire();
-                        try {
-                            long sealStart = System.nanoTime();
-                            byte[] frame = HpkeFrames.sealChunk(context,key,source,target,flight.prepared.aad(id,context.bindingHash()),flight.prepared.compressedBytes());
-                            metrics.sealed(System.nanoTime() - sealStart);
-                            metrics.beginAttempt(flight.attempts > 1);
+            if (initial!=null) { outcomes.addAll(initial); initial=null; } else {
+                try {
+                    for (var flight : batch) {
+                        if (ledger.acknowledged(flight.prepared.receipt(id).chunkIndex())) continue;
+                        flight.attempts++;
+                        futures.add(sends.submit(() -> {
+                            admission.acquire();
                             try {
-                            metrics.sent(frame.length,flight.attempts > 1);
-                            long sent = System.nanoTime();
-                            var response = http.exchange(URI.create(uri + "/chunks/" + flight.prepared.receipt(id).chunkIndex()),"PUT","application/lcp-frame",frame,
-                                    context.request().targetNodeId(),context.request().routeId(),directory,MetadataCodec.CONTROL_LIMIT);
-                            context.checkWriter(response.source(),response.target());
-                            try { success(response); }
-                            catch (TransferException e) {
-                                if (e.code() == BUSY) metrics.busy();
-                                return new Outcome(flight,response,null);
+                                return send(flight,context,source,target,uri);
                             }
-                            var ack = TransferJson.ack(response.body());
-                            if (!flight.prepared.receipt(id).equals(ack.receipt())) throw new AuthenticationException();
-                            metrics.acknowledged(System.nanoTime() - sent, ack.queueMicros(), ack.persistMicros(),
-                                    flight.attempts > 1, !"APPLIED".equals(ack.disposition()));
-                            return new Outcome(flight,response,null);
-                            } finally { metrics.endAttempt(); }
-                        } catch (IOException e) { return new Outcome(flight,null,e); }
-                        finally { admission.release(); }
-                    }));
+                            finally { admission.release(); }
+                        }));
+                    }
+                    for (var future : futures) {
+                        try { outcomes.add(future.get()); }
+                        catch (ExecutionException e) { throw new IOException("Chunk worker failed",e.getCause()); }
+                    }
+                } finally {
+                    // Never use Future.cancel as proof that a worker has relinquished its buffers.
+                    boolean interrupted = Thread.interrupted();
+                    for (var future : futures) while (true) {
+                        try { future.get(); break; }
+                        catch (InterruptedException e) { interrupted = true; }
+                        catch (ExecutionException e) { break; }
+                    }
+                    if (interrupted) Thread.currentThread().interrupt();
                 }
-                for (var future : futures) {
-                    try { outcomes.add(future.get()); }
-                    catch (ExecutionException e) { throw new IOException("Chunk worker failed",e.getCause()); }
-                }
-            } finally {
-                // Never use Future.cancel as proof that a worker has relinquished its buffers.
-                boolean interrupted = Thread.interrupted();
-                for (var future : futures) while (true) {
-                    try { future.get(); break; }
-                    catch (InterruptedException e) { interrupted = true; }
-                    catch (ExecutionException e) { break; }
-                }
-                if (interrupted) Thread.currentThread().interrupt();
             }
             boolean uncertain = false, pressure = false; long retryAfter = 0; int attempts = 0;
             for (var outcome : outcomes) {
