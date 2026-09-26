@@ -1,4 +1,5 @@
 """Validate and publish only generated, non-identifying benchmark evidence."""
+import argparse
 from collections import Counter
 import gzip
 import hashlib
@@ -18,6 +19,12 @@ def interval(baseline, candidate):
     gains.sort(); return [gains[249],gains[9749]]
 
 def main():
+    global REPORT
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output",type=Path,default=run.OUT)
+    parser.add_argument("--report",type=Path,default=REPORT)
+    args=parser.parse_args(); run.OUT=args.output.resolve(); REPORT=args.report.resolve()
+    if (REPORT/"README.md").exists(): raise ValueError("Refusing to overwrite a published report")
     run.summarize()
     rows=json.loads((run.OUT/"raw.json").read_text())
     rows=[r for r in rows if r["run"].startswith(("train-","eval-","confirm-","quota-","scale-"))]
@@ -54,7 +61,7 @@ def main():
         phase,scenario,kind,size,strategy=key.split("/")
         group=[r for r in rows if r["run"].startswith(phase+"-") and (r["scenario"],r["dataset"],r["size"],r["strategy"])==(scenario,kind,size,strategy) and r["status"]=="COMPLETED"]
         stats["medianGoodputMiBps"]=statistics.median(r["inputBytes"]/run.MIB/(r["completionNanos"]/1e9) for r in group) if group else None
-        for field in ["cpuNanos","tlsUpstreamBytes","tlsDownstreamBytes","ackP95Nanos","queueShare","peakHeapPoolSum","nmtNativeCommittedAtExit","decisionNanos"]:
+        for field in ["cpuNanos","tlsUpstreamBytes","tlsDownstreamBytes","ackP95Nanos","queueShare","persistShare","peakHeapPoolSum","nmtNativeCommittedAtExit","decisionNanos"]:
             values=[r[field] for r in group if r.get(field) is not None]
             stats["median_"+field]=statistics.median(values) if values else None
     manifest=json.loads((run.OUT/"inputs/manifest.json").read_text())
@@ -107,13 +114,18 @@ def main():
         met.append(passed)
         fixed=summary[f"eval/{scenario}/mixed/long/B0"]["medianSeconds"]
         full=summary[f"eval/{scenario}/mixed/long/FULL"]["medianSeconds"]
-        lines.append(f"- {scenario} 的 FULL 相对 B0 时间改善 {(1-full/fixed)*100:.1f}%。即使相对 B1 达到数值阈值，也需结合 B0 与实际试探次数判断是否来自反馈。")
+        if fixed is not None: lines.append(f"- {scenario} 的 FULL 相对 B0 时间改善 {(1-full/fixed)*100:.1f}%。仍需结合失败与完整试探计数判断是否来自反馈。")
         lines.append(f"- {scenario}：FULL 时间相对 B1 改善 {gain*100:.1f}%，95% 区间 [{ci[0]*100:.1f}%, {ci[1]*100:.1f}%]；重传字节中位数 B1={br:g}、FULL={cr:g}。"+("达到本组工程阈值，仍须限制结论范围。" if passed else "未满足可确认的收益目标。"))
     lines += ["", "## 控制器行为与资源", ""]
     for strategy in ["B2","WC","FULL"]:
         group=[r for r in evaluation if r["strategy"]==strategy]
         active=sum(r.get("trials",0)>0 for r in group)
         lines.append(f"- {strategy}：{len(group)} 次评测中 {active} 次启动试探，共 {sum(r.get('trials',0) for r in group)} 次试探、{sum(r.get('rollbacks',0) for r in group)} 次回退；控制器累计耗时 {sum(r.get('decisionNanos',0) for r in group)/1e6:.3f} ms。")
+    for strategy in ["B2","WC","FULL"]:
+        group=[r for r in evaluation if r["strategy"]==strategy]
+        for dimension in ["window","compression","chunk"]:
+            counts={field:sum(r.get(dimension+"Trials"+field,0) for r in group) for field in ["Started","Evaluated","Retained","RolledBack","Interrupted"]}
+            lines.append(f"- {strategy}/{dimension}: "+", ".join(f"{key}={value}" for key,value in counts.items())+"。")
     lines += [f"- 全部评测进程最大 RSS 为 {max(r['peakRssBytes'] for r in evaluation)/run.MIB:.1f} MiB。RSS 为进程高水位与 50 ms 采样的最大值；包含两端和代理，不能当作单端缓冲预算。",
               "- Heap 为各内存池峰值之和；NMT native 为 JVM 退出快照，非峰值，也不覆盖所有第三方原生分配。TLS 字节不包含 TCP/IP 首部和内核重传；应用重传按提交给 HTTP 的完整帧计量，可能含未全部发出的请求，不等价于抓包重传字节。ACK P95 为最近 64 条有效样本，不是全程直方图。", ""]
     for row in rows:
@@ -131,11 +143,11 @@ def main():
                 lines.append(f"- {scenario}：存在全组失败，不作收益判断。"); continue
             gain=1-cg["medianSeconds"]/bg["medianSeconds"]
             lines.append(f"- {scenario}：B1 {bg['medianSeconds']:.3f} 秒，WC {cg['medianSeconds']:.3f} 秒，相对改善 {gain*100:.1f}%；失败 B1={bg['failures']}、WC={cg['failures']}。")
-    else: lines.append("FULL 已达到预选组目标，因此未触发条件式简化复测。")
+    else: lines.append("本档案未包含条件式简化复测；是否达到目标以预选组分析为准。")
     failures=[r for r in rows if r["status"]!="COMPLETED"]
     lines += ["", "## 结论与限制", "", ("至少一个预选组满足相对 B1 的数值工程阈值；仍不能把初始参数差异、共同管线行为或运行波动当成联合反馈的因果收益。" if any(met) else "本轮未确认完整反馈策略相对训练固定基线达到预定收益。已测安全传输、内容与资源不变式通过，研究收益目标尚未达成。"), "",
-              "运行环境存在可观测变化：90 次训练均报告 32 个可用处理器，评测 261 次报告 32 个、14 次报告 16 个；全部确认及资源检查报告 16 个。变化影响首轮 mixed/entropy 稳定场景及阶跃场景，原因未确定，可能影响调度和耗时。所有记录保留，因此不能把这些比较当作严格恒定环境下的因果证据。", "",
-              "发送管线在每批准备与发送之间切换，整块峰值预留也可能限制物理窗口；运行时间不足以完成试探的组不能用来证明稳态收益。应结合 trials、windowFullNanos、budgetBlockedNanos 与实际块数分析，不把未触发调参解释成有效自适应。", "",
+              "JVM 可用处理器数分布及启动参数见 environment.json 和原始记录；仅在本轮固定资源内比较策略，不把与旧报告之间的差异归因于控制器。", "",
+              "所有策略共用相同源码的传输管线。运行时间不足以完成试探的组不能证明稳态收益，应同时检查各维完整评估计数、实际窗口和预算受限时间。", "",
               f"保留全部 {len(rows)} 次训练、评测、确认和资源检查结果，其中 {len(failures)} 次非成功（含预期配额拒绝）。失败明细如下：", ""]
     lines.extend(f"- `{r['run']}`：{r.get('errorReason',r.get('errorType','FAILED'))}。" for r in failures)
     lines += ["", "## 复现与证据", "", "构建及运行命令见 [实验入口](../../../benchmarks/README.md)。同一输入清单、已冻结 B1 选择与轨迹定义可以复现方法；精确耗时受操作系统调度、JIT、缓存和其他负载影响。", "",

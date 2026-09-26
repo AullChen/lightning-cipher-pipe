@@ -53,3 +53,7 @@ RSS is sampled every 50 ms and includes the OS process high-water mark where ava
 `FrameAllocationRun` 是独立帧转换分配诊断，不运行吞吐矩阵；方法、参数、每端分配/峰值工作集与窗口见[诊断报告](../docs/experiments/frame-allocation-v1/README.md)。
 
 `BenchmarkRun` 另支持 `journal` 诊断场景，在持有 receipt 日志锁时注入与 `sink` 相同的提交延迟；不自动加入原五策略评测矩阵。输出新增 persistShare、effectiveFinalWindow 和各维试探完成计数，见[诊断报告](../docs/experiments/feedback-diagnostics-v1/README.md)。
+
+## Frozen pipeline reevaluation
+
+[D01](../docs/feedback-refinement.md) retains policy v1. Use `run.py --output benchmarks/results/pipeline-v1 --processors 4` with each phase to keep a separate evidence set and a fixed JVM processor count. The remaining heap, buffer, data and repetition settings retain the registered protocol. `analyze.py --output benchmarks/results/pipeline-v1 --report docs/experiments/pipeline-v1` refuses to overwrite an existing published report. Verify the input manifest before reuse; evaluation starts only after the new training selection is frozen. Cross-report timings are not a controlled pipeline A/B comparison.

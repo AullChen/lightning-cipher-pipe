@@ -17,6 +17,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "benchmarks" / "results"
+PROCESSORS = 4
 MIB = 1024 * 1024
 STRATEGIES = ["B0", "B1", "B2", "WC", "FULL"]
 CANDIDATES = [(4194304,4,3), (1048576,4,1), (1048576,4,3), (4194304,1,3), (8388608,4,1), (8388608,4,3)]
@@ -102,7 +103,7 @@ def run(name, strategy, scenario, kind, size, split="eval", params=None, max_chu
     input_file=OUT/"inputs"/f"{split}-{kind}-{size}.bin"
     java=Path(os.environ["JAVA_HOME"])/"bin"/("java.exe" if os.name=="nt" else "java")
     classpath=os.pathsep.join([str(ROOT/"benchmarks/target/classes"),str(ROOT/"benchmarks/target/lib/*")])
-    flags=["-Xms128m","-Xmx2048m","-XX:NativeMemoryTracking=summary","-XX:+UnlockDiagnosticVMOptions","-XX:+PrintNMTStatistics",
+    flags=[f"-XX:ActiveProcessorCount={PROCESSORS}","-Xms128m","-Xmx2048m","-XX:NativeMemoryTracking=summary","-XX:+UnlockDiagnosticVMOptions","-XX:+PrintNMTStatistics",
            "-Dsun.net.httpserver.maxReqTime=60","-Dsun.net.httpserver.maxRspTime=60","-Djdk.httpserver.maxConnections=32"]
     command=[str(java),*flags,"-cp",classpath,"io.github.aullchen.lcp.examples.BenchmarkRun",str(input_file),str(folder),
              strategy,scenario,split,*map(str,params),str(max_chunks)]
@@ -127,6 +128,8 @@ def run(name, strategy, scenario, kind, size, split="eval", params=None, max_chu
                    "peakRssBytes":peak or None,"rssSamples":samples,"rssIntervalMillis":50,
                    "nmtNativeCommittedAtExit":int(total[2])-int(heap[2]) if total and heap else None,
                    "jvmFlags":flags,"wallSecondsIncludingSetup":time.monotonic()-started})
+    if result.get("processors") is not None and result["processors"] != PROCESSORS:
+        raise ValueError("JVM processor count differs from frozen configuration")
     if result.get("status")=="COMPLETED":
         manifest=json.loads((OUT/"inputs/manifest.json").read_text())
         if result.get("outputSha256") != manifest["files"][input_file.name]["sha256"]: raise ValueError("Independent manifest SHA mismatch")
@@ -141,6 +144,7 @@ def run(name, strategy, scenario, kind, size, split="eval", params=None, max_chu
     return result
 
 def train(repeats):
+    if (OUT/"selection.json").exists(): raise ValueError("Refusing to replace frozen selection")
     if repeats<5: raise ValueError("Training requires at least five independent repeats")
     groups=[("stable","text"),("step","mixed"),("sink","mixed")]
     values={str(i):[[] for _ in groups] for i in range(len(CANDIDATES))}
@@ -182,16 +186,22 @@ def summarize():
                       "p95Seconds":seconds[math.ceil(.95*len(seconds))-1] if seconds else None,"minSeconds":min(seconds) if seconds else None,
                       "maxSeconds":max(seconds) if seconds else None,"medianRetryBytes":statistics.median(r["retriedFrameBytes"] for r in passed) if passed else None,
                       "maxRssBytes":max((r.get("peakRssBytes") or 0 for r in group),default=0),
+                      "evaluatedTrials":sum(sum(r.get(d+"TrialsEvaluated",0) for d in ["window","compression","chunk"]) for r in group),
                       "trials":sum(r.get("trials",0) for r in group),"rollbacks":sum(r.get("rollbacks",0) for r in group)}
     dump(OUT/"summary.json",summary)
     dump(OUT/"raw.json",records)
     print("Summarized",len(records),"runs in",len(groups),"evaluation groups",flush=True)
 
 def main():
+    global OUT, PROCESSORS
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode",choices=["prepare","smoke","train","evaluate","scale","confirm","summary"])
     parser.add_argument("--long-mib",type=int,default=512); parser.add_argument("--repeats",type=int,default=5)
+    parser.add_argument("--output",type=Path,default=OUT)
+    parser.add_argument("--processors",type=int,default=4)
     args=parser.parse_args()
+    if args.processors < 1: parser.error("processors must be positive")
+    OUT=args.output.resolve(); PROCESSORS=args.processors
     if args.mode=="prepare": prepare(args.long_mib)
     elif args.mode=="smoke":
         for strategy in STRATEGIES: run("smoke-"+strategy,strategy,"stable","mixed","short")
