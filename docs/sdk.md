@@ -1,6 +1,6 @@
 # SDK 接入与双节点演示
 
-本指南面向 Java 17 使用者。演示只需要 JDK 17、Maven Wrapper 下载所需依赖和可写的普通文件系统，无需数据库。参考适配器目前验证于 Windows 11 / NTFS；其他操作系统、网络文件系统及机器断电持久性尚无验收结论。性能研究结果见[反馈实验](experiments/feedback-v1/README.md)：完整及简化反馈策略均未达到预定收益。
+本指南面向 Java 17 使用者。演示只需要 JDK 17、Maven Wrapper 下载所需依赖和可写的普通文件系统，无需数据库。参考适配器目前验证于 Windows 11 / NTFS；其他操作系统、网络文件系统及机器断电持久性尚无验收结论。性能研究结果见[共同管线复评](experiments/pipeline-v1/README.md)及保留的[首次实验](experiments/feedback-v1/README.md)：完整及简化反馈策略均未达到预定收益。
 
 ## 从源码构建
 
@@ -115,7 +115,7 @@ System.out.println(result.handleId() + " " + result.totalPlainBytes());
 | 运行时 / 文件系统 | Java 17；实测 Windows 11 / NTFS；不支持其他进程修改 Sink 根 |
 | 安全 | TLS 1.3 mTLS、固定 HPKE Auth 套件、节点/路由/密钥显式授权 |
 | 数据与策略 | 有限 File/Generator/自定义 Source；NONE/ZSTD；FIXED/FEEDBACK |
-| 并发 | 单任务有界批次，窗口 1–16，受实际字节预算钳制 |
+| 并发 | 单任务有界在途槽位，按完成顺序回收补位；窗口 1–16，受协商上限与字节预算约束 |
 | 恢复 | 存活源分页对账重试；源重启确认旧终态后从头新传；目标 VERIFYING 重启恢复 |
 | 尚未交付 | 数据库适配、业务导入、UI、多任务调度、发布自动化 |
 | 性能结论 | 五策略评测和简化复测完成，未证实预定研究收益 |

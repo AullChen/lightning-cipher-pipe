@@ -4,7 +4,7 @@
 
 ## 决策：保留 v1，先评估共同管线
 
-保留 policyVersion 1、现有计时定义、试探顺序、阈值和两轮评估规则；persistShare 继续仅作诊断。R09 不新增策略版本。接下来依次交付本决策、R10 独立复评、R11 证据与状态整理，形成三项可审阅提交。
+保留 policyVersion 1、现有计时定义、试探顺序、阈值和两轮评估规则；persistShare 继续仅作诊断。R09 不新增策略版本。本决策作为实验前冻结协议保留；R10 已交付[独立复评](experiments/pipeline-v1/README.md)，R11 将结果纳入[验收记录](milestones.md)。
 
 [压力诊断](experiments/feedback-diagnostics-v1/README.md)中，正常/慢提交/日志锁竞争的 queueShare 均为 0，persistShare 能区分条件；但慢提交比例不等于降低窗口就能提高吞吐。真实长样本只完成一次窗口试探，没有压缩及块大小试探。直接引入持久占比阈值会把观测相关性当成控制收益，目前证据不足。
 

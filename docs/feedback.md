@@ -23,4 +23,4 @@ Open 协商先逐项收紧 Limits，槽位上限还取目标字节预算可容�
 
 在源配置中设置 `scheduling=FEEDBACK`。`chunkBytes` 和 `zstdLevel` 为初始值；`inFlightChunks` 为窗口上限，`initialWindow` 可指定初始窗口，默认等于上限。块大小范围从 256 KiB 到 `min(maxPlainBytes, 8 MiB)`；ZSTD 等级范围为 1–5。最大块仍须满足帧大小和压缩上界检查。FIXED 不接受 `initialWindow`，继续以 `inFlightChunks` 作为固定窗口。
 
-这些阈值是 policyVersion 1 的启发式规则。单轮观测无法区分链路变化与调参因果；测试验证行为、资源和内容不变式；[五策略受控实验](experiments/feedback-v1/README.md)未确认相对训练固定基线的预定收益。改变阈值需提升策略版本并提供实验依据。
+这些阈值是 policyVersion 1 的启发式规则。单轮观测无法区分链路变化与调参因果；测试验证行为、资源和内容不变式；[首次五策略实验](experiments/feedback-v1/README.md)及[共同管线复评](experiments/pipeline-v1/README.md)均未确认相对训练固定基线的预定收益。后者固定 4 个 JVM 可用处理器；FULL 的 13 次试探没有完成两轮评估，不能作为三维联合控制有效的证据。改变阈值需提升策略版本并提供实验依据。
