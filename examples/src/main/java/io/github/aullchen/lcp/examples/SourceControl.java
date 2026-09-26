@@ -43,7 +43,7 @@ public final class SourceControl implements AutoCloseable {
                 var buffer=ByteBuffer.wrap(bytes); while (buffer.hasRemaining()) if (channel.write(buffer)<=0) throw new IOException("No control write progress");
                 channel.force(true);
             }
-            Files.move(temporary,path,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);
+            AtomicFiles.replace(temporary,path);
         } finally { Files.deleteIfExists(temporary); }
     }
     @Override public void close() throws IOException { try { lock.release(); } finally { lockChannel.close(); } }

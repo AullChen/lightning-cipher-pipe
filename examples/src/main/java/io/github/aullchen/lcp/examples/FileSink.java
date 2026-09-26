@@ -90,7 +90,7 @@ public final class FileSink implements TransferSink {
                 while (b.hasRemaining()) if (c.write(b) <= 0) throw new IOException("No storage progress");
                 c.force(true);
             }
-            Files.move(temp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            AtomicFiles.replace(temp, path);
         } finally { Files.deleteIfExists(temp); }
     }
     private void ready() throws IOException { if (closed) throw new IOException("Sink is closed"); safe(root, true); }
