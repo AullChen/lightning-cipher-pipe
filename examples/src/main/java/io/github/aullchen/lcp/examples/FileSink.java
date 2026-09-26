@@ -24,6 +24,7 @@ public final class FileSink implements TransferSink {
         default int write(FileChannel channel, ByteBuffer bytes, long offset) throws IOException { return channel.write(bytes, offset); }
         default void indexAllocated(int slots) {}
         default void replayedReceipt() {}
+        default void indexEntriesMoved(int entries) {}
         default void expiring() throws IOException {}
         default void cancelling() throws IOException {}
         default void after(Boundary boundary) throws IOException {}
@@ -279,9 +280,14 @@ public final class FileSink implements TransferSink {
                 if (b.getInt() != 0x4c435052 || b.getInt() != 1 || (int) crc.getValue() != b.getInt(64)) throw new IOException("Corrupt receipt");
                 long i = b.getLong(), offset = b.getLong(), length = b.getLong(); byte[] hash = new byte[32]; b.get(hash);
                 Receipt r = new Receipt(transfer.request().transferId(), i, offset, length, new Bytes32(hash));
-                validateRange(r);
+                validateBounds(r);
                 if (receipt(i) != null || payload.size() < offset + length) throw new IOException("Inconsistent receipt");
-                insert(r); io.replayedReceipt();
+                ordered[count] = (int) i; indexReceipt(r); io.replayedReceipt();
+            }
+            sortRecoveredOffsets();
+            for (int i = 1; i < count; i++) {
+                Receipt before = receipt(ordered[i - 1]), after = receipt(ordered[i]);
+                if (before.offset() + before.plainLength() > after.offset()) throw new IOException("Overlapping receipts");
             }
             if (size != complete) log.truncate(complete);
             if (saved.state() == State.COMPLETED && (saved.result().totalChunks() != count || saved.result().totalPlainBytes() != total
@@ -308,18 +314,45 @@ public final class FileSink implements TransferSink {
             while (lo < hi) { int mid = (lo + hi) >>> 1; if (index.getLong(ordered[mid] * SLOT + 8) < offset) lo = mid + 1; else hi = mid; }
             return lo;
         }
-        private void validateRange(Receipt r) throws IOException {
+        private void validateBounds(Receipt r) throws IOException {
             if (r.chunkIndex() >= limits.maxChunks() || r.plainLength() > limits.maxPlainBytes()
                     || r.offset() > limits.maxTransferBytes() - r.plainLength()) throw new TransferException(LIMIT_EXCEEDED);
+        }
+        private void validateRange(Receipt r) throws IOException {
+            validateBounds(r);
             int p = position(r.offset());
             if (p > 0) { Receipt before = receipt(ordered[p - 1]); if (before.offset() + before.plainLength() > r.offset()) throw new TransferException(CHUNK_CONFLICT); }
             if (p < count && receipt(ordered[p]).offset() < r.offset() + r.plainLength()) throw new TransferException(CHUNK_CONFLICT);
         }
         private void insert(Receipt r) {
             int p = position(r.offset()), i = (int) r.chunkIndex();
-            System.arraycopy(ordered, p, ordered, p + 1, count - p); ordered[p] = i;
+            System.arraycopy(ordered, p, ordered, p + 1, count - p); io.indexEntriesMoved(count - p); ordered[p] = i;
+            indexReceipt(r);
+        }
+        private void indexReceipt(Receipt r) {
+            int i = (int) r.chunkIndex();
             index.putLong(i * SLOT, r.plainLength()).putLong(i * SLOT + 8, r.offset()); index.put(i * SLOT + 16, r.payloadHash().bytes());
             count++; total = Math.addExact(total, r.plainLength());
+        }
+        // Heapsort reuses the budgeted int array: O(n log n) work, O(1) extra storage.
+        private void sortRecoveredOffsets() {
+            boolean sorted = true;
+            for (int i = 1; i < count; i++) if (orderedOffset(i - 1) > orderedOffset(i)) { sorted = false; break; }
+            if (sorted) return;
+            for (int root = count / 2 - 1; root >= 0; root--) siftDown(root, count);
+            for (int end = count - 1; end > 0; end--) { swapOrdered(0, end); siftDown(0, end); }
+        }
+        private long orderedOffset(int position) { return index.getLong(ordered[position] * SLOT + 8); }
+        private void siftDown(int root, int end) {
+            while (root < end / 2) {
+                int child = root * 2 + 1;
+                if (child + 1 < end && orderedOffset(child) < orderedOffset(child + 1)) child++;
+                if (orderedOffset(root) >= orderedOffset(child)) return;
+                swapOrdered(root, child); root = child;
+            }
+        }
+        private void swapOrdered(int a, int b) {
+            int value = ordered[a]; ordered[a] = ordered[b]; ordered[b] = value; io.indexEntriesMoved(2);
         }
         @Override public synchronized SessionState state() throws IOException {
             check(); return new SessionState(transfer, saved.state(), saved.revision(), count, total,
