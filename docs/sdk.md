@@ -33,12 +33,13 @@ java -cp "examples/target/test-classes;examples/target/classes;examples/target/d
 在同一终端后台启动目标，避免另一个终端缺少密码环境变量：
 
 ```powershell
+New-Item -ItemType Directory -Force run | Out-Null
 $targetArgs = @('-Dsun.net.httpserver.maxReqTime=660', '-Dsun.net.httpserver.maxRspTime=660', '-Djdk.httpserver.maxConnections=16', '-cp', 'examples/target/classes;examples/target/dependency/*', 'io.github.aullchen.lcp.examples.TransferNode', 'target', 'examples/config/target.properties')
-$target = Start-Process -FilePath "$env:JAVA_HOME/bin/java.exe" -ArgumentList $targetArgs -WindowStyle Hidden -PassThru -RedirectStandardOutput target.log -RedirectStandardError target-error.log
-Get-Content target.log
+$target = Start-Process -FilePath "$env:JAVA_HOME/bin/java.exe" -ArgumentList $targetArgs -WindowStyle Hidden -PassThru -RedirectStandardOutput run/target.log -RedirectStandardError run/target-error.log
+Get-Content run/target.log
 ```
 
-若尚未出现监听日志，稍后再次运行 `Get-Content target.log`。等到日志出现 `Listening port=9443` 后运行源。若目标退出，先检查 `target-error.log`，不要把源端超时当成目标未写入的证明。
+若尚未出现监听日志，稍后再次运行 `Get-Content run/target.log`。等到日志出现 `Listening port=9443` 后运行源。若目标退出，先检查 `run/target-error.log`，不要把源端超时当成目标未写入的证明。
 
 ```powershell
 java -cp "examples/target/classes;examples/target/dependency/*" io.github.aullchen.lcp.examples.TransferNode source examples/config/source.properties
