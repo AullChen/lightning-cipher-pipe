@@ -57,3 +57,7 @@ RSS is sampled every 50 ms and includes the OS process high-water mark where ava
 ## Frozen pipeline reevaluation
 
 [D01](../docs/feedback-refinement.md) retains policy v1. Use `run.py --output benchmarks/results/pipeline-v1 --processors 4` with each phase to keep a separate evidence set and a fixed JVM processor count. The remaining heap, buffer, data and repetition settings retain the registered protocol. `analyze.py --output benchmarks/results/pipeline-v1 --report docs/experiments/pipeline-v1` refuses to overwrite an existing published report. Verify the input manifest before reuse; evaluation starts only after the new training selection is frozen. Cross-report timings are not a controlled pipeline A/B comparison.
+
+## Complete control-cycle diagnostics
+
+`python benchmarks/control_diagnostics.py NEW_OUTPUT` runs a separate fixed 30-case diagnostic after `mvnw -Pbenchmarks package -DskipTests`. It records fresh JVMs, input/source hashes, all outcomes, and a gate requiring completed two-round evaluations in every dimension of every long transfer. The optional `BenchmarkRun ... control-cycles` profile applies only to FULL, caps its chunk range at 1 MiB, and leaves policy v1 thresholds and the frozen performance matrix unchanged. See the [method and results](../docs/experiments/control-diagnostics-v1/README.md). Keep other host workloads idle for reproduction; diagnostic timings are not performance acceptance.

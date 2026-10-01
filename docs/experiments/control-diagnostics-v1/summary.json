@@ -1,0 +1,154 @@
+{
+  "controlCycleGate": true,
+  "cycleTrials": {
+    "window": {
+      "Started": 8,
+      "Evaluated": 7,
+      "Retained": 7,
+      "RolledBack": 0,
+      "Interrupted": 0
+    },
+    "compression": {
+      "Started": 6,
+      "Evaluated": 6,
+      "Retained": 0,
+      "RolledBack": 6,
+      "Interrupted": 0
+    },
+    "chunk": {
+      "Started": 6,
+      "Evaluated": 6,
+      "Retained": 6,
+      "RolledBack": 0,
+      "Interrupted": 0
+    }
+  },
+  "pressure": [
+    {
+      "scenario": "stable",
+      "window": 1,
+      "runs": 3,
+      "secondsMedian": 1.4130819,
+      "ackP95MillisMedian": 15.2024,
+      "queueShareMedian": 0.0,
+      "persistShareMedian": 0.20286990491469215,
+      "busy": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "scenario": "stable",
+      "window": 2,
+      "runs": 3,
+      "secondsMedian": 1.5733057,
+      "ackP95MillisMedian": 30.8272,
+      "queueShareMedian": 0.0,
+      "persistShareMedian": 0.17295485329981813,
+      "busy": [
+        0,
+        1,
+        0
+      ]
+    },
+    {
+      "scenario": "stable",
+      "window": 4,
+      "runs": 3,
+      "secondsMedian": 2.4233404,
+      "ackP95MillisMedian": 68.3682,
+      "queueShareMedian": 0.0,
+      "persistShareMedian": 0.18695696766347747,
+      "busy": [
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "scenario": "sink",
+      "window": 1,
+      "runs": 3,
+      "secondsMedian": 6.6596661,
+      "ackP95MillisMedian": 103.0497,
+      "queueShareMedian": 0.0,
+      "persistShareMedian": 0.9250168863956065,
+      "busy": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "scenario": "sink",
+      "window": 2,
+      "runs": 3,
+      "secondsMedian": 4.2234697,
+      "ackP95MillisMedian": 103.7728,
+      "queueShareMedian": 0.0,
+      "persistShareMedian": 0.9169175029430893,
+      "busy": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "scenario": "sink",
+      "window": 4,
+      "runs": 3,
+      "secondsMedian": 2.5299799,
+      "ackP95MillisMedian": 126.7244,
+      "queueShareMedian": 0.0,
+      "persistShareMedian": 0.8987895746957726,
+      "busy": [
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "scenario": "journal",
+      "window": 1,
+      "runs": 3,
+      "secondsMedian": 6.4381168,
+      "ackP95MillisMedian": 97.6579,
+      "queueShareMedian": 0.0,
+      "persistShareMedian": 0.9248919688619579,
+      "busy": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "scenario": "journal",
+      "window": 2,
+      "runs": 3,
+      "secondsMedian": 5.7733386,
+      "ackP95MillisMedian": 171.1356,
+      "queueShareMedian": 0.0,
+      "persistShareMedian": 0.9553463146297132,
+      "busy": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "scenario": "journal",
+      "window": 4,
+      "runs": 3,
+      "secondsMedian": 5.885412,
+      "ackP95MillisMedian": 496.4169,
+      "queueShareMedian": 0.0,
+      "persistShareMedian": 0.9742124896460189,
+      "busy": [
+        0,
+        0,
+        0
+      ]
+    }
+  ]
+}

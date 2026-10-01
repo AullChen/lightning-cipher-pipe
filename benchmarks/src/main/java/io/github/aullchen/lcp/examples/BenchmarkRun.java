@@ -35,13 +35,18 @@ public final class BenchmarkRun {
         return HexFormat.of().formatHex(digest.digest());
     }
     public static void main(String[] args) throws Exception {
-        if (args.length!=9) throw new IllegalArgumentException("input outputDirectory strategy scenario train|eval chunk window level maxChunks");
+        if (args.length!=9 && args.length!=10) throw new IllegalArgumentException("input outputDirectory strategy scenario train|eval chunk window level maxChunks [control-cycles]");
         Path input=Path.of(args[0]), output=Path.of(args[1]);
         Files.createDirectory(output); // refuse overwriting any previous result or output
         String strategy=args[2], scenario=args[3]; boolean training=args[4].equals("train");
         int chunk=Integer.parseInt(args[5]), window=Integer.parseInt(args[6]), level=Integer.parseInt(args[7]);
         long maxChunks=Long.parseLong(args[8]); long bytes=Files.size(input);
         var policy=policy(strategy,chunk,window,level);
+        // Separate diagnostic envelope; never changes the frozen train/eval matrix.
+        boolean cycles=args.length==10 && args[9].equals("control-cycles");
+        if (args.length==10 && (!cycles || !strategy.equals("FULL"))) throw new IllegalArgumentException("Unknown diagnostic profile");
+        if (cycles) policy=new Policy(policy.mode(),policy.policyVersion(),262144,1048576,chunk,
+                1,4,window,1,5,level);
         var limits=new Limits(9437184,8388608,maxChunks,Math.max(1,bytes),16);
         var sourceBudget=new ByteBudget(BUDGET); var targetBudget=new ByteBudget(BUDGET);
         var codec=new ZstdCompression(); CompressionPlan.validate(policy,limits,codec,BUDGET);
@@ -66,6 +71,7 @@ public final class BenchmarkRun {
         result.put("initialChunk",chunk); result.put("initialWindow",window); result.put("initialLevel",level);
         result.put("effectiveInitialWindow",Math.min(window,BUDGET/CompressionPlan.peak(limits,codec)));
         result.put("bufferBudgetPerPeer",BUDGET); result.put("metadataBudgetPerPeer",METADATA); result.put("maxChunks",maxChunks);
+        result.put("diagnosticProfile",cycles?"control-cycles":"none");
         result.put("compressionWorkers",1); result.put("sourceAndTargetSameJvm",true);
         try (var sink=new FileSink(output.resolve("sink"),METADATA,io);
              var handler=new TransferHttpHandler(sink,targetKey,directory,"bench","target",limits,targetBudget,Clock.systemUTC(),Duration.ofMinutes(2),codec);
