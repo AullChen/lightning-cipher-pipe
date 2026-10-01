@@ -10,6 +10,10 @@ class TransferNodeTest extends StorageTestSupport {
     @Test void feedbackConfigurationUsesBoundedRangesAndExplicitInitialWindow() {
         var p=new Properties(); p.setProperty("scheduling","FEEDBACK"); p.setProperty("inFlightChunks","4"); p.setProperty("initialWindow","2");
         var policy=TransferNode.policy(p);
+        assertEquals(1,policy.policyVersion());
+        p.setProperty("policyVersion","2"); assertEquals(2,TransferNode.policy(p).policyVersion());
+        p.setProperty("policyVersion","3"); assertThrows(IllegalArgumentException.class,()->TransferNode.policy(p));
+        p.remove("policyVersion");
         assertEquals(1,policy.mode()); assertEquals(2,policy.initialWindow()); assertEquals(4,policy.maxWindow());
         assertEquals(262144,policy.minChunkBytes()); assertEquals(8388608,policy.maxChunkBytes());
         p.setProperty("initialWindow","5"); assertThrows(IllegalArgumentException.class,() -> TransferNode.policy(p));

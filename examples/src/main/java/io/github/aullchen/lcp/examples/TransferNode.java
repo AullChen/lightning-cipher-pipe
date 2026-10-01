@@ -25,7 +25,7 @@ public final class TransferNode {
         try (var reader = Files.newBufferedReader(path)) { p.load(reader); }
         Set<String> allowed = new HashSet<>(Set.of("nodeId", "peerNodeId", "tlsKeyStore", "tlsTrustStore", "hpkePrivateKey", "hpkeKeyId",
                 "peerHpkeKeyId", "peerHpkePublicKey", "routeId", "maxFrameBytes", "maxPlainBytes", "maxChunks", "maxTransferBytes", "bufferBudget", "metadataBudget", "inFlightChunks"));
-        allowed.addAll(role.equals("source") ? Set.of("peerUrl", "controlRecord", "inputFile", "generatorBytes", "generatorSeed", "chunkBytes", "compression", "zstdLevel", "scheduling", "initialWindow")
+        allowed.addAll(role.equals("source") ? Set.of("peerUrl", "controlRecord", "inputFile", "generatorBytes", "generatorSeed", "chunkBytes", "compression", "zstdLevel", "scheduling", "initialWindow", "policyVersion")
                 : Set.of("listenHost", "listenPort", "outputRoot", "shutdownGraceMillis", "verificationTimeoutMillis"));
         for (String name : p.stringPropertyNames()) if (!allowed.contains(name)) throw new IllegalArgumentException("Unknown configuration key: " + name);
         return p;
@@ -47,6 +47,7 @@ public final class TransferNode {
     static Policy policy(Properties p) {
         String scheduling = p.getProperty("scheduling", "FIXED");
         if (!Set.of("FIXED", "FEEDBACK").contains(scheduling)) throw new IllegalArgumentException("Unknown scheduling mode");
+        int version = Math.toIntExact(number(p,"policyVersion",1));
         long chunk = number(p,"chunkBytes",4194304); int level = Math.toIntExact(number(p,"zstdLevel",3));
         if (chunk < 262144 || chunk > 8388608) throw new IllegalArgumentException("Chunk size outside supported range");
         String compression = p.getProperty("compression","ZSTD");
@@ -56,11 +57,11 @@ public final class TransferNode {
         if (window < 1 || window > 16) throw new IllegalArgumentException("Window outside supported range");
         if (scheduling.equals("FIXED")) {
             if (p.containsKey("initialWindow")) throw new IllegalArgumentException("initialWindow requires FEEDBACK");
-            return new Policy(0,1,chunk,chunk,chunk,window,window,window,level,level,level);
+            return new Policy(0,version,chunk,chunk,chunk,window,window,window,level,level,level);
         }
         long maxChunk = Math.min(8388608, number(p,"maxPlainBytes",8388608));
         if (maxChunk < 262144) throw new IllegalArgumentException("Feedback requires at least 256 KiB chunks");
-        return new Policy(1,1,262144,maxChunk,chunk,1,window,number(p,"initialWindow",window),
+        return new Policy(1,version,262144,maxChunk,chunk,1,window,number(p,"initialWindow",window),
                 1,compression.equals("NONE") ? 1 : 5,level);
     }
     public static void main(String[] args) throws Exception { run(args,new FileSink.Io(){}); }

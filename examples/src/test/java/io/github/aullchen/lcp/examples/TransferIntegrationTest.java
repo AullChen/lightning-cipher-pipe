@@ -205,6 +205,19 @@ class TransferIntegrationTest extends StorageTestSupport {
             } finally { release.countDown(); }
         }
     }
+    @Test void authenticatedPolicyVersionCannotBeSilentlyDowngraded() throws Exception {
+        try (var pair=new Pair()) {
+            var old=pair.request();
+            var policy=new Policy(1,2,262144,262144,262144,1,1,1,1,1,1);
+            var request=new OpenRequest(old.transferId(),old.routeId(),old.sourceNodeId(),old.targetNodeId(),old.sourceChallenge(),
+                    old.sourceKeyId(),old.sourcePublicKeyHash(),old.targetKeyId(),old.targetPublicKeyHash(),List.of(0),policy,old.limits(),old.createdAt(),old.expiresAt());
+            var opened=pair.open(request); var accepted=opened.context.accepted();
+            assertEquals(2,accepted.policy().policyVersion());
+            var downgraded=new Accepted(accepted.transferId(),accepted.targetChallenge(),accepted.handleId(),accepted.compressionCode(),
+                    new Policy(1,1,262144,262144,262144,1,1,1,1,1,1),accepted.limits(),accepted.expiresAt());
+            assertThrows(AuthenticationException.class,()->BoundTransfer.freeze(request,downgraded,opened.source,opened.target,directory,pair.clock.now));
+        }
+    }
     @Test void newOpenFinalizesExpiredTaskWithoutPriorStatusQuery() throws Exception {
         try (var pair = new Pair()) {
             var old=pair.request(); pair.open(old); pair.clock.now=old.expiresAt();
@@ -385,16 +398,16 @@ class TransferIntegrationTest extends StorageTestSupport {
             assertArrayEquals(expected, actual); assertEquals(0, pair.sourceBudget.used()); assertEquals(0, pair.targetBudget.used());
         }
     }
-    @ParameterizedTest @ValueSource(ints = {0,1})
-    void shortFeedbackTransferKeepsInitialChunksAndAuthenticatedPolicy(int code) throws Exception {
+    @ParameterizedTest @org.junit.jupiter.params.provider.CsvSource({"0,1","1,1","0,2","1,2"})
+    void shortFeedbackTransferKeepsInitialChunksAndAuthenticatedPolicy(int code,int version) throws Exception {
         var bounds = new Limits(600000,524288,128,16*1024*1024,3);
         try (var pair = new Pair(new FileSink.Io(){},bounds)) {
             var fixed = pair.request();
-            var policy = new Policy(1,1,262144,524288,262144,1,3,2,1,code==0?1:5,1);
+            var policy = new Policy(1,version,262144,524288,262144,1,3,2,1,code==0?1:5,1);
             var request = new OpenRequest(fixed.transferId(),fixed.routeId(),fixed.sourceNodeId(),fixed.targetNodeId(),fixed.sourceChallenge(),
                     fixed.sourceKeyId(),fixed.sourcePublicKeyHash(),fixed.targetKeyId(),fixed.targetPublicKeyHash(),List.of(code),policy,bounds,fixed.createdAt(),fixed.expiresAt());
             // The ZSTD workspace leaves room for only one target slot in this budget.
-            var expected = code==0 ? policy : new Policy(1,1,262144,524288,262144,1,1,1,1,5,1);
+            var expected = code==0 ? policy : new Policy(1,version,262144,524288,262144,1,1,1,1,5,1);
             var result = pair.sender.transfer(pair.endpoint,request,new GeneratorSource(524289,42),accepted -> {
                 assertEquals(expected,accepted.response().accepted().policy());
                 assertEquals(code==0?3:1,accepted.response().accepted().limits().maxInFlightChunks());
@@ -515,8 +528,8 @@ class TransferIntegrationTest extends StorageTestSupport {
             assertEquals(2,pair.status(request.transferId()).committedChunks());
         }
     }
-    @ParameterizedTest @ValueSource(booleans = {false,true})
-    void fullBudgetRetriesFreshFramesBeforeNewSourceReads(boolean feedback) throws Exception {
+    @ParameterizedTest @ValueSource(ints = {0,1,2})
+    void fullBudgetRetriesFreshFramesBeforeNewSourceReads(int version) throws Exception {
         var bounds = new Limits(300000,262144,128,16*1024*1024,3);
         var attempts = new java.util.concurrent.atomic.AtomicIntegerArray(3);
         var firstFrames = new java.util.concurrent.ConcurrentHashMap<Integer,byte[]>();
@@ -551,7 +564,7 @@ class TransferIntegrationTest extends StorageTestSupport {
             handler.handle(x,source,target);
         })) {
             var fixed = requestWith(pair,bounds,262144,3);
-            var policy = feedback ? new Policy(1,1,262144,262144,262144,1,3,3,1,1,1) : fixed.policy();
+            var policy = version > 0 ? new Policy(1,version,262144,262144,262144,1,3,3,1,1,1) : fixed.policy();
             var request = new OpenRequest(fixed.transferId(),fixed.routeId(),fixed.sourceNodeId(),fixed.targetNodeId(),fixed.sourceChallenge(),
                     fixed.sourceKeyId(),fixed.sourcePublicKeyHash(),fixed.targetKeyId(),fixed.targetPublicKeyHash(),List.of(0),policy,bounds,fixed.createdAt(),fixed.expiresAt());
             var budget = new ByteBudget(3*CompressionPlan.peak(bounds,ChunkCompression.NONE));
@@ -564,7 +577,7 @@ class TransferIntegrationTest extends StorageTestSupport {
                 var result = sender.transfer(pair.endpoint,request,input); assertEquals(4,result.totalChunks());
                 assertEquals(7,sender.metrics().attempts()); assertEquals(3,sender.metrics().retries());
                 assertEquals(3,sender.metrics().busy()); assertEquals(3*262144+1,sender.metrics().confirmedBytes());
-                if (feedback) assertEquals(1,maxWrites.get());
+                if (version > 0) assertEquals(1,maxWrites.get());
             }
             for (int i=0;i<3;i++) assertEquals(2,attempts.get(i));
             assertEquals(0,budget.used()); assertEquals(4*68,Files.size(root.resolve(request.transferId()+"/receipts.log")));

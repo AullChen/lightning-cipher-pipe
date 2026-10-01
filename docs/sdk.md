@@ -65,6 +65,7 @@ java -cp "examples/target/classes;examples/target/dependency/*" io.github.aullch
 | `controlRecord` / `outputRoot` | 源控制文件 / 目标专用 Sink 根；不得共用其他业务目录 |
 | `inputFile` 或 `generatorBytes` | 源端必须且只能选择一种；生成流另有 `generatorSeed` |
 | `scheduling`、`chunkBytes`、`inFlightChunks` | FIXED/FEEDBACK、256 KiB–8 MiB、窗口 1–16 |
+| `policyVersion` | 仅源配置，默认 1；显式选择 2 启用可选两维反馈规则，两端须支持该版本，不自动降级 |
 | `initialWindow` | 仅 FEEDBACK 接受，默认窗口上限；详见[反馈策略](feedback.md) |
 | `compression`、`zstdLevel` | NONE/ZSTD；ZSTD 1–5，NONE 的实际等级固定为 1 |
 | `maxFrameBytes`、`maxPlainBytes`、`maxChunks`、`maxTransferBytes` | 两端认证协商的资源上限，不能超过对方接受范围 |

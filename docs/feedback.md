@@ -1,4 +1,4 @@
-# 反馈调度 v1
+# 反馈调度
 
 `Policy.mode=1` 启用 FEEDBACK；`mode=0` 为 FIXED。两个模式共用认证、持久回执、完整性验证、重试和[计量口径](metrics.md)。`FixedTransferClient` 保留原 API 名称，现支持两种模式。FIXED 不执行反馈决策。
 
@@ -8,7 +8,7 @@ Open 协商先逐项收紧 Limits，槽位上限还取目标字节预算可容�
 
 例如，源允许 256–512 KiB、初始 512 KiB，目标最大明文为 256 KiB 时，可接受 256 KiB 的单点区间；若源固定为 512 KiB，则拒绝。
 
-## 决策规则
+## v1 决策规则
 
 每轮至少有 16 个非重试有效 ACK，且经过至少 2 秒；短传输保持初始参数。除收到认证 BUSY 的压力处理外，缺失或无效观测时保持参数。每个传输仅维护最近 64 个样本、当前聚合、一个试探和冷却计数，不持久化调度历史。
 
@@ -25,4 +25,12 @@ Open 协商先逐项收紧 Limits，槽位上限还取目标字节预算可容�
 
 这些阈值是 policyVersion 1 的启发式规则。单轮观测无法区分链路变化与调参因果；测试验证行为、资源和内容不变式；[首次五策略实验](experiments/feedback-v1/README.md)及[共同管线复评](experiments/pipeline-v1/README.md)均未确认相对训练固定基线的预定收益。后者固定 4 个 JVM 可用处理器；FULL 的 13 次试探没有完成两轮评估，不能作为三维联合控制有效的证据。改变阈值需提升策略版本并提供实验依据。
 
-后续[完整周期诊断](experiments/control-diagnostics-v1/README.md)在单独声明的最大块 1 MiB、512 MiB 输入范围内，三次均完成三维评估；窗口/块大小合计保留 7/6 次，压缩 6 次均回退。该结果补充可运行性证据，不改变原范围内无收益的结论。默认 v1 保持不变，[v2 简化提案](feedback-v2-proposal.md)尚待确认。
+后续[完整周期诊断](experiments/control-diagnostics-v1/README.md)在单独声明的最大块 1 MiB、512 MiB 输入范围内，三次均完成三维评估；窗口/块大小合计保留 7/6 次，压缩 6 次均回退。该结果补充可运行性证据，不改变原范围内无收益的结论。默认 v1 保持不变，[v2 简化方案](feedback-v2-proposal.md)已确认；独立验证结果不替代原报告。
+
+## 可选 policyVersion 2
+
+源配置可显式设置 `scheduling=FEEDBACK` 和 `policyVersion=2`；省略 policyVersion 仍为 1。SDK 在 Policy 中指定版本 2。两端须升级至支持 v2 的实现，旧端拒绝未知版本；源端拒绝接受响应中的版本变化，不自动降级。帧版本不变。
+
+v2 保留每轮 16 ACK / 2 秒、两轮评估、两轮冷却及 5% 吞吐 / 1.2 倍 ACK P95 判定；固定协商后的初始压缩等级，只轮换窗口和块大小。窗口候选条件与 v1 相同；块候选不再检查 queueShare。queueShare 和 persistShare 仅作诊断，只有认证 BUSY 触发压力退让。缺失或无效观测仍保持参数，改变仅应用于新块，已准备块的压缩材料、索引和摘要不变。
+
+这是显式选择的实验策略，不代表已优于固定策略。规则及 18 次对照诊断协议见[确认方案](feedback-v2-proposal.md)。

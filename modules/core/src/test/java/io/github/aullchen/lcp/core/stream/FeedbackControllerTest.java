@@ -29,9 +29,10 @@ class FeedbackControllerTest {
         var actual=controller.observe(round(1000,100,queue,compression,full,eof,blocked,retry,busy,0));
         assertEquals(new FeedbackController.Parameters(chunk,window,level),actual);
     }
-    @ParameterizedTest @CsvSource({"1050,120,0,true", "1049,100,0,false", "1100,121,0,false", "1100,100,1,false"})
-    void evaluateTwoRoundsThenCoolDown(long bytes,long p95,long failures,boolean accepted) {
-        var controller=new FeedbackController(policy()); controller.observe(normal(1000));
+    @ParameterizedTest @CsvSource({"1,1050,120,0,true", "1,1049,100,0,false", "1,1100,121,0,false", "1,1100,100,1,false",
+            "2,1050,120,0,true", "2,1049,100,0,false", "2,1100,121,0,false", "2,1100,100,1,false"})
+    void evaluateTwoRoundsThenCoolDown(int version,long bytes,long p95,long failures,boolean accepted) {
+        var controller=new FeedbackController(new Policy(1,version,262144,8388608,1048576,1,16,4,1,5,3)); controller.observe(normal(1000));
         assertEquals(5,controller.parameters().window()); assertTrue(controller.trialActive());
         controller.observe(round(bytes,p95,.05,.4,.9,false,false,0,0,failures));
         assertTrue(controller.trialActive());
@@ -41,7 +42,31 @@ class FeedbackControllerTest {
         controller.observe(normal(1000)); controller.observe(normal(1000));
         assertFalse(controller.trialActive()); assertEquals(0,controller.cooldownRounds());
         controller.observe(normal(1000));
-        assertEquals(4,controller.parameters().zstdLevel()); // rotation proceeds to compression
+        assertEquals(version==1?4:3,controller.parameters().zstdLevel());
+        if (version==2) assertEquals(2097152,controller.parameters().chunkBytes());
+    }
+    @Test void v2SkipsCompressionAndQueuePressureButBusyStillInterrupts() {
+        var c=new FeedbackController(new Policy(1,2,262144,8388608,1048576,1,16,4,1,5,3));
+        var baseline=round(1000,100,.9,.9,.9,false,false,0,0,0);
+        c.observe(baseline); assertEquals(5,c.parameters().window());
+        c.observe(normal(1100)); c.observe(normal(1100));
+        c.observe(normal(1100)); c.observe(normal(1100));
+        c.observe(baseline);
+        assertEquals(new FeedbackController.Parameters(2097152,5,3),c.parameters());
+        assertEquals(0,c.diagnostics().compression().started());
+        c.observe(round(1000,100,.9,.9,.9,false,false,0,1,0));
+        assertEquals(new FeedbackController.Parameters(1048576,2,3),c.parameters());
+        assertEquals(1,c.diagnostics().chunk().interrupted());
+        assertEquals(2,c.cooldownRounds());
+    }
+    @Test void v2MissingObservationsAndFixedModeNeverStartTrials() {
+        for (int mode : new int[]{0,1}) {
+            var c=new FeedbackController(new Policy(mode,2,262144,262144,262144,1,1,1,3,3,3));
+            var initial=c.parameters();
+            c.observe(null); c.observe(normal(1000)); c.pressure();
+            assertEquals(initial,c.parameters()); assertFalse(c.trialActive());
+            assertEquals(0,c.diagnostics().compression().started());
+        }
     }
     @Test void trialsRotateThroughAllThreeDimensions() {
         var c=new FeedbackController(policy());

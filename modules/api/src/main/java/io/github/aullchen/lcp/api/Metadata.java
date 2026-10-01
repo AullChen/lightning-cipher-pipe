@@ -57,7 +57,7 @@ public final class Metadata {
                          int minZstdLevel, int maxZstdLevel, int initialZstdLevel) {
         public Policy {
             code(mode);
-            if (policyVersion != 1) throw new IllegalArgumentException("Unknown policy version");
+            if (policyVersion != 1 && policyVersion != 2) throw new IllegalArgumentException("Unknown policy version");
             range(minChunkBytes, initialChunkBytes, maxChunkBytes);
             range(minWindow, initialWindow, maxWindow);
             range(minZstdLevel, initialZstdLevel, maxZstdLevel);

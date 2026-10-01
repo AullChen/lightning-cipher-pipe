@@ -2,7 +2,7 @@ package io.github.aullchen.lcp.core.stream;
 
 import io.github.aullchen.lcp.api.Metadata.Policy;
 
-/** Policy v1: one trial at a time, two evaluation rounds, two cooldown rounds. */
+/** Policies v1/v2: one trial at a time, two evaluation rounds, two cooldown rounds. */
 public final class FeedbackController {
     public record Parameters(int chunkBytes, int window, int zstdLevel) {}
     private final Policy policy;
@@ -40,7 +40,7 @@ public final class FeedbackController {
         if (policy.mode() == 0 || r == null) return current;
         if (r.busy() > 0) { pressure(); return current; }
         if (!valid(r)) return current;
-        if (r.queueShare() > .25) { pressure(); return current; }
+        if (policy.policyVersion() == 1 && r.queueShare() > .25) { pressure(); return current; }
         if (previous != null) {
             trialBytes += r.confirmedBytes(); trialNanos += r.elapsedNanos();
             budgetFailure |= r.budgetFailures() > 0;
@@ -56,6 +56,7 @@ public final class FeedbackController {
         if (cooldown > 0) { cooldown--; return current; }
         for (int checked = 0; checked < 3; checked++) {
             int next = dimension; dimension = (dimension + 1) % 3;
+            if (policy.policyVersion() == 2 && next == 1) continue; // v2 fixes compression at its initial level.
             Parameters candidate = candidate(next, r);
             if (!candidate.equals(current)) {
                 previous = current; current = candidate;
@@ -76,7 +77,7 @@ public final class FeedbackController {
         }
         if (dimension == 2) {
             if (r.retries() > 0) chunk /= 2;
-            else if (r.windowFullShare() >= .8 && r.queueShare() <= .1) chunk *= 2;
+            else if (r.windowFullShare() >= .8 && (policy.policyVersion() == 2 || r.queueShare() <= .1)) chunk *= 2;
         }
         return new Parameters((int)Math.max(policy.minChunkBytes(), Math.min(policy.maxChunkBytes(),chunk)),
                 (int)Math.max(policy.minWindow(),Math.min(policy.maxWindow(),window)),

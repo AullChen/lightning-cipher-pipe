@@ -20,9 +20,10 @@ public final class BenchmarkRun {
     static final long BUDGET=512L*1024*1024, METADATA=8L*1024*1024;
     static Policy policy(String strategy,int chunk,int window,int level) {
         return switch(strategy) {
-            case "B0", "B1" -> new Policy(0,1,chunk,chunk,chunk,window,window,window,level,level,level);
+            case "B0", "B1", "FIXED" -> new Policy(0,1,chunk,chunk,chunk,window,window,window,level,level,level);
             case "B2" -> new Policy(1,1,chunk,chunk,chunk,1,16,window,level,level,level);
             case "WC" -> new Policy(1,1,262144,8388608,chunk,1,16,window,level,level,level);
+            case "V2" -> new Policy(1,2,262144,8388608,chunk,1,16,window,1,5,level);
             case "FULL" -> new Policy(1,1,262144,8388608,chunk,1,16,window,1,5,level);
             default -> throw new IllegalArgumentException("Unknown strategy");
         };
@@ -44,7 +45,7 @@ public final class BenchmarkRun {
         var policy=policy(strategy,chunk,window,level);
         // Separate diagnostic envelope; never changes the frozen train/eval matrix.
         boolean cycles=args.length==10 && args[9].equals("control-cycles");
-        if (args.length==10 && (!cycles || !strategy.equals("FULL"))) throw new IllegalArgumentException("Unknown diagnostic profile");
+        if (args.length==10 && (!cycles || !Set.of("FULL","V2").contains(strategy))) throw new IllegalArgumentException("Unknown diagnostic profile");
         if (cycles) policy=new Policy(policy.mode(),policy.policyVersion(),262144,1048576,chunk,
                 1,4,window,1,5,level);
         var limits=new Limits(9437184,8388608,maxChunks,Math.max(1,bytes),16);
@@ -67,7 +68,7 @@ public final class BenchmarkRun {
         };
         var result=new LinkedHashMap<String,Object>();
         result.put("strategy",strategy); result.put("scenario",scenario); result.put("trace",training?"train-v1":"eval-v1");
-        result.put("inputBytes",bytes); result.put("inputSha256",expected); result.put("policyVersion",1);
+        result.put("inputBytes",bytes); result.put("inputSha256",expected); result.put("policyVersion",policy.policyVersion());
         result.put("initialChunk",chunk); result.put("initialWindow",window); result.put("initialLevel",level);
         result.put("effectiveInitialWindow",Math.min(window,BUDGET/CompressionPlan.peak(limits,codec)));
         result.put("bufferBudgetPerPeer",BUDGET); result.put("metadataBudgetPerPeer",METADATA); result.put("maxChunks",maxChunks);

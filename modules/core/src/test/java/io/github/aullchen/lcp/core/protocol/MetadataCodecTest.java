@@ -37,6 +37,13 @@ class MetadataCodecTest {
     static Accepted accepted() { return new Accepted(TRANSFER, filled(51), "handle-1", 0, POLICY, LIMITS, request().expiresAt()); }
     static Bytes32 binding() { return new Bytes32(vector("binding.sha256")); }
 
+    @Test void policyV2RoundTripsAndUnknownVersionsAreRejected() {
+        var p=new Policy(1,2,262144,1048576,262144,1,4,1,1,5,3);
+        assertEquals(p,MetadataCodec.decode(MetadataCodec.encode(p),Policy.class));
+        assertEquals(p,MetadataJson.decode(MetadataJson.encode(p),Policy.class));
+        for (int version : new int[]{0,3})
+            assertThrows(IllegalArgumentException.class,()->new Policy(1,version,262144,1048576,262144,1,4,1,1,5,3));
+    }
     @Test void independentOpenAndBinding() {
         assertArrayEquals(vector("open.cbor"), MetadataCodec.encode(request()));
         assertEquals(request(), MetadataCodec.decode(vector("open.cbor"), OpenRequest.class));
