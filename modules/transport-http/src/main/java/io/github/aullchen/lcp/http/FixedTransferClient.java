@@ -31,6 +31,7 @@ public final class FixedTransferClient implements AutoCloseable {
     private volatile TransferMetrics metrics = new TransferMetrics();
     public TransferMetrics.Snapshot metrics() { return metrics.snapshot(); }
     private volatile boolean closed;
+    private volatile Thread workerThread;
     private volatile TransferSource activeSource;
     public FixedTransferClient(AuthenticatedHttpClient http, HpkeKey key, PeerDirectory directory, ByteBudget budget, Clock clock) {
         this(http, key, directory, budget, clock, ChunkCompression.NONE);
@@ -81,11 +82,12 @@ public final class FixedTransferClient implements AutoCloseable {
             synchronized (this) {
                 if (isCancelled()) return;
                 runner = Thread.currentThread();
+                workerThread = runner;
             }
             try { complete(transfer(endpoint,request,source,observer,this::isCancelled)); }
             catch (InterruptedException e) { Thread.currentThread().interrupt(); completeExceptionally(e); }
             catch (Throwable e) { completeExceptionally(e); }
-            finally { synchronized (this) { runner = null; } }
+            finally { synchronized (this) { runner = null; workerThread = null; } }
         }
         @Override public boolean cancel(boolean mayInterruptIfRunning) {
             // Completing a future can invoke caller callbacks that wait for this worker to exit.
@@ -213,8 +215,11 @@ public final class FixedTransferClient implements AutoCloseable {
     }
     private record Outcome(Flight flight, AuthenticatedHttpClient.Response response, IOException failure) {}
     private void live(BoundTransfer context, BooleanSupplier cancelled) throws TransferException {
-        if (closed || cancelled.getAsBoolean()) throw new TransferException(UNAVAILABLE);
+        running(cancelled);
         if (!context.accepted().expiresAt().isAfter(clock.instant())) throw new TransferException(EXPIRED);
+    }
+    private void running(BooleanSupplier cancelled) throws TransferException {
+        if (closed || cancelled.getAsBoolean()) throw new TransferException(UNAVAILABLE);
     }
     private void pipeline(ExecutorService sends, OrderedChunker chunks, int capacity, ChunkCompression codec,
                           ReceiptLedger ledger, BoundTransfer context, TlsIdentity source, TlsIdentity target, URI uri,
@@ -449,7 +454,8 @@ public final class FixedTransferClient implements AutoCloseable {
             if (status.state() == State.COMPLETED) return completed(status,context,manifest);
             long verificationStarted = System.nanoTime();
             while (status.state() == State.VERIFYING) {
-                live(context,cancelled);
+                // Finish was admitted before write expiry; verification has its own deadline.
+                running(cancelled);
                 if (System.nanoTime()-verificationStarted >= Duration.ofMinutes(10).toNanos()) throw new TransferException(UNKNOWN_COMMIT);
                 Thread.sleep(500);
                 status = status(uri,context);
@@ -481,7 +487,9 @@ public final class FixedTransferClient implements AutoCloseable {
     }
     /** Close after outstanding transfers complete. Transport and Sink lifetimes remain caller-owned. */
     @Override public void close() throws IOException { close(Duration.ofSeconds(60)); }
-    /** A timeout leaves outstanding workers and their leases owned until they really exit. */
+    /** A timeout leaves outstanding workers and their leases owned until they really exit.
+     * On the source worker, completion callbacks initiate shutdown without awaiting their own exit.
+     */
     public void close(Duration grace) throws IOException {
         if (grace.isNegative() || grace.isZero()) throw new IllegalArgumentException("Invalid shutdown grace");
         long started=System.nanoTime(); closed=true; worker.shutdown();
@@ -494,6 +502,9 @@ public final class FixedTransferClient implements AutoCloseable {
                     TimeUnit.NANOSECONDS.timedWait(completion,remaining);
                 }
             }
+            // Synchronous completion callbacks execute on this worker after transfer cleanup.
+            // Shutdown still drains queued tasks; an external close can await their exit.
+            if (Thread.currentThread()==workerThread) return;
             if (!worker.awaitTermination(Math.max(0,grace.toNanos()-(System.nanoTime()-started)),TimeUnit.NANOSECONDS)) throw new TransferException(UNKNOWN_COMMIT);
         } catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new TransferException(UNKNOWN_COMMIT); }
     }

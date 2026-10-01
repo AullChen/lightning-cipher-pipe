@@ -167,6 +167,44 @@ class TransferIntegrationTest extends StorageTestSupport {
             } finally { release.countDown(); }
         }
     }
+    @Test void senderWaitsForAdmittedVerificationPastWriteExpiry() throws Exception {
+        var reading=new CountDownLatch(1); var release=new CountDownLatch(1);
+        try (var pair=new Pair(new FileSink.Io(){
+            public int read(java.nio.channels.FileChannel channel,ByteBuffer bytes,long offset) throws IOException {
+                reading.countDown(); LifecycleStorageTest.await(release); return channel.read(bytes,offset);
+            }
+        })) {
+            try {
+                var request=pair.request();
+                var result=pair.sender.start(pair.endpoint,request,new GeneratorSource(1,42)).toCompletableFuture();
+                assertTrue(reading.await(3,TimeUnit.SECONDS)); pair.clock.now=request.expiresAt();
+                assertThrows(TimeoutException.class,()->result.get(1200,TimeUnit.MILLISECONDS));
+                assertEquals(State.VERIFYING,pair.status(request.transferId()).state());
+                release.countDown();
+                assertEquals(1,result.get(5,TimeUnit.SECONDS).totalPlainBytes());
+                assertEquals(State.COMPLETED,pair.status(request.transferId()).state());
+                assertEquals(0,pair.sourceBudget.used()); assertEquals(0,pair.targetBudget.used());
+            } finally { release.countDown(); }
+        }
+    }
+    @Test void normalCompletionCallbackCanCloseSender() throws Exception {
+        var accepted=new CountDownLatch(1); var release=new CountDownLatch(1);
+        try (var pair=new Pair()) {
+            try {
+                var future=pair.sender.start(pair.endpoint,pair.request(),new GeneratorSource(0,42),a->{
+                    accepted.countDown(); LifecycleStorageTest.await(release);
+                });
+                assertTrue(accepted.await(3,TimeUnit.SECONDS));
+                var callback=future.whenComplete((result,failure)->{
+                    assertNull(failure); assertEquals(0,result.totalPlainBytes());
+                    assertDoesNotThrow(()->pair.sender.close(Duration.ofMillis(200)));
+                }).toCompletableFuture();
+                release.countDown(); callback.get(5,TimeUnit.SECONDS);
+                pair.sender.close(Duration.ofSeconds(2));
+                assertEquals(0,pair.sourceBudget.used()); assertEquals(0,pair.targetBudget.used());
+            } finally { release.countDown(); }
+        }
+    }
     @Test void newOpenFinalizesExpiredTaskWithoutPriorStatusQuery() throws Exception {
         try (var pair = new Pair()) {
             var old=pair.request(); pair.open(old); pair.clock.now=old.expiresAt();
