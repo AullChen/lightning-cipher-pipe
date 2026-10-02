@@ -65,3 +65,21 @@ RSS is sampled every 50 ms and includes the OS process high-water mark where ava
 ## Policy v2 comparison
 
 After building with `mvnw -Pbenchmarks package -DskipTests`, run `python benchmarks/policy_v2.py NEW_OUTPUT`. The approved matrix contains 18 fresh JVMs: FULL-v1, V2 and FIXED × sink/journal × three repetitions, with rotated strategy order, identical 512 MiB input and resource limits. FIXED here is 1 MiB/window 4/level 3, not the previously trained B1. Both dynamic groups use the diagnostic 1 MiB chunk ceiling. The script retains all outcomes, stops on correctness/process failure, and requires completed window/chunk evaluations. `--summarize` recomputes descriptive paired comparisons from an existing directory without rerunning transfers. Do not run builds or other load tests concurrently with the measurement.
+
+## Changing receiver capacity: window-only research study
+
+The [frozen protocol](../docs/window-adaptation-protocol.md) asks whether existing window feedback reduces initial-configuration sensitivity while staying within 10% of the best measured fixed window. It compares F1/F2/F4 with v2 A1/A4 in 15 fresh JVMs; all groups use identical chunks, compression, input and a 4 → 1 → 4 admission-capacity trace. This is an isolated window experiment, not a new policy or a rerun of the B1 matrix.
+
+Set `JAVA_HOME` to JDK 17 and use Python 3.10+:
+
+```sh
+./mvnw -Pbenchmarks verify
+python -m unittest discover -s benchmarks -p test_window_adaptation_report.py -v
+python benchmarks/window_adaptation.py benchmarks/results/window-study-new
+python -m pip install -r benchmarks/requirements-plots.txt
+python benchmarks/window_adaptation_report.py benchmarks/results/window-study-new docs/experiments/window-study-new
+```
+
+Use `mvnw.cmd` on Windows. Install plotting dependencies before measurement or after the matrix completes. Both output directories must be new. Allow roughly 5 GiB for the shared input and retained receiver outputs. Each process has a 300-second limit; any failure is retained and stops the matrix without an implicit retry. Keep builds and other load tests separate from measurement. The runner needs no external dataset or service.
+
+The report command performs no transfers: it validates completeness/integrity, summarizes all repeats, archives the 250 ms traces and renders one four-panel PNG/SVG using preselected repetition 0. Matplotlib is required only for plotting; the runner and analysis tests use the standard library. Response times require a sustained two-second window band and exclude the verification tail. Raw records, method, result interpretation and limitations are in the [published window study](../docs/experiments/window-adaptation-v1/README.md).
