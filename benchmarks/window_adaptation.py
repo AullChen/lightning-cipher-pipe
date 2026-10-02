@@ -31,7 +31,7 @@ def main():
            '-Dsun.net.httpserver.maxRspTime=60','-Djdk.httpserver.maxConnections=32']
     cases=[(f'{strategy}-r{repeat}',strategy,repeat) for repeat in range(3)
            for strategy in STRATEGIES[repeat:]+STRATEGIES[:repeat]]
-    dump(out/'manifest.json',{'protocol':'window-adaptation-1','cases':cases,'seed':104729,'inputBytes':source.stat().st_size(),
+    dump(out/'manifest.json',{'protocol':'window-adaptation-1','cases':cases,'seed':104729,'inputBytes':source.stat().st_size,
          'inputSha256':expected,'jvmArguments':flags,'timeoutSeconds':300,'figureRepetition':0,
          'sourceCommit':subprocess.check_output(['git','-c',f'safe.directory={ROOT.as_posix()}','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
          'java':subprocess.check_output([java,'-version'],stderr=subprocess.STDOUT,text=True),
