@@ -12,7 +12,7 @@
 - **恢复与取消**：丢失 ACK 后分页对账、有界重试、目标重启恢复及明确的输入所有权。
 - **压缩与调度**：NONE/ZSTD；固定参数 FIXED 和实验性 FEEDBACK 策略。
 
-FEEDBACK 会试探窗口、块大小与压缩等级，但现有实验**未证实相对训练固定基线的预定性能收益**。不要将其视为自动获得更高吞吐的保证，详见[共同管线复评](docs/experiments/pipeline-v1/README.md)。
+FEEDBACK 默认 v1 试探窗口、块大小与压缩等级；显式可选的 v2 固定压缩等级，只试探窗口与块大小。现有实验**未证实相对训练固定基线的预定性能收益**。不要将其视为自动获得更高吞吐的保证，详见[共同管线复评](docs/experiments/pipeline-v1/README.md)及 [v2 对照诊断](docs/experiments/policy-v2/README.md)。
 
 ## 快速开始
 

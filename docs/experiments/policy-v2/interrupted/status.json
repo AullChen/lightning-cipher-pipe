@@ -1,0 +1,7 @@
+{
+  "status": "INTERRUPTED_UNKNOWN",
+  "completedRecords": 8,
+  "startedWithoutResult": "sink-FULL-r1",
+  "notStartedCases": 9,
+  "includedInCompleteMatrix": false
+}

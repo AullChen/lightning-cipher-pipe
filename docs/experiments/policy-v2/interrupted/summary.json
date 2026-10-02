@@ -1,0 +1,257 @@
+{
+  "completeMatrix": false,
+  "integrityAndLeases": true,
+  "dynamicCycleGate": true,
+  "v2CompressionFixed": true,
+  "counterConsistency": true,
+  "groups": [
+    {
+      "scenario": "sink",
+      "strategy": "FULL",
+      "runs": 1,
+      "successes": 1,
+      "seconds": [
+        69.6083964
+      ],
+      "secondsMedian": 69.6083964,
+      "cpuSecondsMedian": 3.5625,
+      "retries": [
+        1
+      ],
+      "busy": [
+        1
+      ],
+      "trials": {
+        "window": {
+          "Started": 3,
+          "Evaluated": 1,
+          "Retained": 1,
+          "RolledBack": 0,
+          "Interrupted": 1
+        },
+        "compression": {
+          "Started": 2,
+          "Evaluated": 2,
+          "Retained": 0,
+          "RolledBack": 2,
+          "Interrupted": 0
+        },
+        "chunk": {
+          "Started": 2,
+          "Evaluated": 2,
+          "Retained": 2,
+          "RolledBack": 0,
+          "Interrupted": 0
+        }
+      }
+    },
+    {
+      "scenario": "sink",
+      "strategy": "V2",
+      "runs": 2,
+      "successes": 2,
+      "seconds": [
+        60.7792506,
+        61.3897974
+      ],
+      "secondsMedian": 61.084524,
+      "cpuSecondsMedian": 8.09375,
+      "retries": [
+        1,
+        1
+      ],
+      "busy": [
+        1,
+        1
+      ],
+      "trials": {
+        "window": {
+          "Started": 7,
+          "Evaluated": 5,
+          "Retained": 5,
+          "RolledBack": 0,
+          "Interrupted": 1
+        },
+        "compression": {
+          "Started": 0,
+          "Evaluated": 0,
+          "Retained": 0,
+          "RolledBack": 0,
+          "Interrupted": 0
+        },
+        "chunk": {
+          "Started": 4,
+          "Evaluated": 4,
+          "Retained": 4,
+          "RolledBack": 0,
+          "Interrupted": 0
+        }
+      }
+    },
+    {
+      "scenario": "sink",
+      "strategy": "FIXED",
+      "runs": 2,
+      "successes": 2,
+      "seconds": [
+        17.9845191,
+        22.772188
+      ],
+      "secondsMedian": 20.37835355,
+      "cpuSecondsMedian": 6.015625,
+      "retries": [
+        0,
+        2
+      ],
+      "busy": [
+        0,
+        1
+      ],
+      "trials": {
+        "window": {
+          "Started": 0,
+          "Evaluated": 0,
+          "Retained": 0,
+          "RolledBack": 0,
+          "Interrupted": 0
+        },
+        "compression": {
+          "Started": 0,
+          "Evaluated": 0,
+          "Retained": 0,
+          "RolledBack": 0,
+          "Interrupted": 0
+        },
+        "chunk": {
+          "Started": 0,
+          "Evaluated": 0,
+          "Retained": 0,
+          "RolledBack": 0,
+          "Interrupted": 0
+        }
+      }
+    },
+    {
+      "scenario": "journal",
+      "strategy": "FULL",
+      "runs": 1,
+      "successes": 1,
+      "seconds": [
+        85.422492
+      ],
+      "secondsMedian": 85.422492,
+      "cpuSecondsMedian": 4.171875,
+      "retries": [
+        0
+      ],
+      "busy": [
+        0
+      ],
+      "trials": {
+        "window": {
+          "Started": 3,
+          "Evaluated": 3,
+          "Retained": 0,
+          "RolledBack": 3,
+          "Interrupted": 0
+        },
+        "compression": {
+          "Started": 3,
+          "Evaluated": 3,
+          "Retained": 0,
+          "RolledBack": 3,
+          "Interrupted": 0
+        },
+        "chunk": {
+          "Started": 2,
+          "Evaluated": 2,
+          "Retained": 2,
+          "RolledBack": 0,
+          "Interrupted": 0
+        }
+      }
+    },
+    {
+      "scenario": "journal",
+      "strategy": "V2",
+      "runs": 1,
+      "successes": 1,
+      "seconds": [
+        77.0541233
+      ],
+      "secondsMedian": 77.0541233,
+      "cpuSecondsMedian": 10.328125,
+      "retries": [
+        0
+      ],
+      "busy": [
+        0
+      ],
+      "trials": {
+        "window": {
+          "Started": 5,
+          "Evaluated": 5,
+          "Retained": 1,
+          "RolledBack": 4,
+          "Interrupted": 0
+        },
+        "compression": {
+          "Started": 0,
+          "Evaluated": 0,
+          "Retained": 0,
+          "RolledBack": 0,
+          "Interrupted": 0
+        },
+        "chunk": {
+          "Started": 2,
+          "Evaluated": 2,
+          "Retained": 2,
+          "RolledBack": 0,
+          "Interrupted": 0
+        }
+      }
+    },
+    {
+      "scenario": "journal",
+      "strategy": "FIXED",
+      "runs": 1,
+      "successes": 1,
+      "seconds": [
+        49.4676805
+      ],
+      "secondsMedian": 49.4676805,
+      "cpuSecondsMedian": 8.546875,
+      "retries": [
+        0
+      ],
+      "busy": [
+        0
+      ],
+      "trials": {
+        "window": {
+          "Started": 0,
+          "Evaluated": 0,
+          "Retained": 0,
+          "RolledBack": 0,
+          "Interrupted": 0
+        },
+        "compression": {
+          "Started": 0,
+          "Evaluated": 0,
+          "Retained": 0,
+          "RolledBack": 0,
+          "Interrupted": 0
+        },
+        "chunk": {
+          "Started": 0,
+          "Evaluated": 0,
+          "Retained": 0,
+          "RolledBack": 0,
+          "Interrupted": 0
+        }
+      }
+    }
+  ],
+  "comparisons": [],
+  "diagnosticGate": false
+}

@@ -1,0 +1,214 @@
+{
+  "protocol": "policy-v2-diagnostic-1",
+  "cases": [
+    [
+      "sink-FULL-r0",
+      "sink",
+      "FULL",
+      0
+    ],
+    [
+      "sink-V2-r0",
+      "sink",
+      "V2",
+      0
+    ],
+    [
+      "sink-FIXED-r0",
+      "sink",
+      "FIXED",
+      0
+    ],
+    [
+      "journal-FULL-r0",
+      "journal",
+      "FULL",
+      0
+    ],
+    [
+      "journal-V2-r0",
+      "journal",
+      "V2",
+      0
+    ],
+    [
+      "journal-FIXED-r0",
+      "journal",
+      "FIXED",
+      0
+    ],
+    [
+      "sink-V2-r1",
+      "sink",
+      "V2",
+      1
+    ],
+    [
+      "sink-FIXED-r1",
+      "sink",
+      "FIXED",
+      1
+    ],
+    [
+      "sink-FULL-r1",
+      "sink",
+      "FULL",
+      1
+    ],
+    [
+      "journal-V2-r1",
+      "journal",
+      "V2",
+      1
+    ],
+    [
+      "journal-FIXED-r1",
+      "journal",
+      "FIXED",
+      1
+    ],
+    [
+      "journal-FULL-r1",
+      "journal",
+      "FULL",
+      1
+    ],
+    [
+      "sink-FIXED-r2",
+      "sink",
+      "FIXED",
+      2
+    ],
+    [
+      "sink-FULL-r2",
+      "sink",
+      "FULL",
+      2
+    ],
+    [
+      "sink-V2-r2",
+      "sink",
+      "V2",
+      2
+    ],
+    [
+      "journal-FIXED-r2",
+      "journal",
+      "FIXED",
+      2
+    ],
+    [
+      "journal-FULL-r2",
+      "journal",
+      "FULL",
+      2
+    ],
+    [
+      "journal-V2-r2",
+      "journal",
+      "V2",
+      2
+    ]
+  ],
+  "seed": 104729,
+  "inputBytes": 536870912,
+  "inputSha256": "161018c4871f690ca5687ec262efb5eed7a1258b855ad05d26002a38212bd27c",
+  "jvmArguments": [
+    "-Xms128m",
+    "-Xmx768m",
+    "-XX:ActiveProcessorCount=4",
+    "-Dsun.net.httpserver.maxReqTime=60",
+    "-Dsun.net.httpserver.maxRspTime=60",
+    "-Djdk.httpserver.maxConnections=32"
+  ],
+  "timeoutSeconds": 300,
+  "sourceCommit": "cfc4b344c81f6136e7749fb6ed162d1e91994ea8",
+  "java": "openjdk version \"17.0.7\" 2023-04-18 LTS\nOpenJDK Runtime Environment Microsoft-7626293 (build 17.0.7+7-LTS)\nOpenJDK 64-Bit Server VM Microsoft-7626293 (build 17.0.7+7-LTS, mixed mode, sharing)\n",
+  "sources": {
+    "modules/api/src/main/java/io/github/aullchen/lcp/api/Bytes32.java": "31533327785caaf16232ccc6f14a557639b4fc373ad0883a944e66a8e2ed5c36",
+    "modules/api/src/main/java/io/github/aullchen/lcp/api/Chunk.java": "8ce177000fab9d4584c1980ef5cc279f13ec72a6e6faf31a20d7b71bae72b279",
+    "modules/api/src/main/java/io/github/aullchen/lcp/api/Metadata.java": "424427cf57722d9308eaa7d24b3ef48268573775476b0464934ad3dc9587e0ae",
+    "modules/api/src/main/java/io/github/aullchen/lcp/api/SinkSession.java": "903a67580dfda4b5869919e5184a2f670c64090efdc0b37729d3ae3fde718af9",
+    "modules/api/src/main/java/io/github/aullchen/lcp/api/TransferException.java": "feea57b88060b21e94526e7d8fda2f521f4e2a34c44aeb77f3914c9986d89c8d",
+    "modules/api/src/main/java/io/github/aullchen/lcp/api/TransferSink.java": "108d382bca6f0410bb74fd02ed2f9dffa198121fa8e097a6b2e328e51ca93def",
+    "modules/api/src/main/java/io/github/aullchen/lcp/api/TransferSource.java": "974f79df42fe58f224f81a83013139d97125d99e636ea9e2351c620b053747af",
+    "modules/api/src/main/java/io/github/aullchen/lcp/api/TransferStorage.java": "4a968cf3d921b9c8150247c759da85f4e1c97a38036d1fc8e67e8684e87e9e4b",
+    "modules/compression-zstd/src/main/java/io/github/aullchen/lcp/compression/ZstdCompression.java": "d4009b7156202456cf988322948b0a438162e89f074d0c0f6826db76cb926aa2",
+    "modules/compression-zstd/src/test/java/io/github/aullchen/lcp/compression/ZstdCompressionTest.java": "0af6ca4728a8180f036f753ccfc2ecc7e4532f779eabcece15b98c9c6536ab58",
+    "modules/core/src/main/java/io/github/aullchen/lcp/core/protocol/CanonicalCbor.java": "8c9c7e29460e42394e573b6c0d2cd065caf1b72797d24b913674d3974bfb8214",
+    "modules/core/src/main/java/io/github/aullchen/lcp/core/protocol/FrameCodec.java": "00e829700927669e6654c67e11ba00ea39733ecd26ffcbfd7aac58d06eae165e",
+    "modules/core/src/main/java/io/github/aullchen/lcp/core/protocol/MerkleFrontier.java": "8883dc99e31161186647a061fce74af2082338edb79b93e85a3b998d8b5c1604",
+    "modules/core/src/main/java/io/github/aullchen/lcp/core/protocol/MetadataCodec.java": "de66fe0ec06f2b9bc07397db54163d44280d3cb94f95e7ad59e8fb12e6f399dd",
+    "modules/core/src/main/java/io/github/aullchen/lcp/core/protocol/MetadataJson.java": "07ee4eb9f4fb540d58aac1474f22251a0a84b222ff3854105a1a4f0a3ab55d28",
+    "modules/core/src/main/java/io/github/aullchen/lcp/core/protocol/ProtocolException.java": "d73da05f8ed92489350594cecf7105f72fa09e3688621f6af1d79c7ca9fa742d",
+    "modules/core/src/main/java/io/github/aullchen/lcp/core/protocol/SourceControlCodec.java": "bf39aead8e32cfe43597996b172b442182badc4b92a1815471cf9c596eeacccf",
+    "modules/core/src/main/java/io/github/aullchen/lcp/core/protocol/StorageCodec.java": "f4edbd6b0938cced058973d5e19dc9abd5544cdbdf657123bf8b3a6708b177de",
+    "modules/core/src/main/java/io/github/aullchen/lcp/core/protocol/TransferJson.java": "08e10fed7f07523e7ac333d231dd5817fc301d3366a2dc41d29069bfc006bb5c",
+    "modules/core/src/main/java/io/github/aullchen/lcp/core/stream/ByteBudget.java": "1525a87dfa6d570332b97f75ca162c5dbe1997d8c0d1634af7e9522bbdcf77b8",
+    "modules/core/src/main/java/io/github/aullchen/lcp/core/stream/ChunkCompression.java": "06bc5990af577c70be7630444ce832d58af8fd25535d11b3336f2a63a7682137",
+    "modules/core/src/main/java/io/github/aullchen/lcp/core/stream/CompressionPlan.java": "1c2f1fd6fd441e61b70f22e646fb94e831e5f853eb5d087c719503c66a446795",
+    "modules/core/src/main/java/io/github/aullchen/lcp/core/stream/FeedbackController.java": "9fb97ba0fd7fbeb8cad411be61bef74db9e777c4b272cb7b056ef3cd6e007702",
+    "modules/core/src/main/java/io/github/aullchen/lcp/core/stream/OrderedChunker.java": "0ef847f6fd194b622ee7dc0535a6ddba5f66a3c89e515ab28588f1d7dc902a66",
+    "modules/core/src/main/java/io/github/aullchen/lcp/core/stream/PreparedChunk.java": "d56e0b76867f7bf23c71d8a41bf9cac470429b6f780e28dfa34fac93e0d70e59",
+    "modules/core/src/main/java/io/github/aullchen/lcp/core/stream/ReceiptLedger.java": "45c6e1814bc142ab5947daed38ab5f2abf9fcdd710d82c6e29d829599c0e9bcd",
+    "modules/core/src/main/java/io/github/aullchen/lcp/core/stream/TransferMetrics.java": "a2f336eda1adcb06d2e232dd93405c985edf2a7650fb3b7f0c983589d65d802f",
+    "modules/core/src/main/java/io/github/aullchen/lcp/core/stream/TransferVerifier.java": "14afce5daa73a2331201d012a7d14381a04d06327bd4ccadc2bb5a9f38c417bb",
+    "modules/core/src/test/java/io/github/aullchen/lcp/core/protocol/FrameCodecTest.java": "e1ba71382484ec53e44352dfcd086fe877a7d6418c79f8b8219199122b3fa8e8",
+    "modules/core/src/test/java/io/github/aullchen/lcp/core/protocol/MerkleFrontierTest.java": "5b7289b5774be9f4f0a4a80e6c87d4e908e6d6ee4a21e47c0e4e4b232895852e",
+    "modules/core/src/test/java/io/github/aullchen/lcp/core/protocol/MetadataCodecTest.java": "ed55e5655a92ad3656f42497e5837f55e6d04fdaea888b26da9e6fc6d559cc99",
+    "modules/core/src/test/java/io/github/aullchen/lcp/core/protocol/TransferJsonTest.java": "e76c2ce97d8192aff75603cb98bddcc266e47e03c16618e1ca5ed3e45252763b",
+    "modules/core/src/test/java/io/github/aullchen/lcp/core/stream/CompressionPlanTest.java": "4381c52bc56e1124058a8232af65431815af0bf59b829051cb96447f53440239",
+    "modules/core/src/test/java/io/github/aullchen/lcp/core/stream/FeedbackControllerTest.java": "75e83c8c2602ad7fe4352376d8de0e72227b335f8775a78a92c1d23553c1a449",
+    "modules/core/src/test/java/io/github/aullchen/lcp/core/stream/ReceiptLedgerTest.java": "565c6fbd169f48bb60c631ad12c674000fc86093df908d8140eee4e2d0a7322f",
+    "modules/core/src/test/java/io/github/aullchen/lcp/core/stream/TransferMetricsTest.java": "f8bab574192be898c026a44d54f42e94901360cf84fb3cb38f989222a38b4f88",
+    "modules/security/src/main/java/io/github/aullchen/lcp/security/AuthenticationException.java": "68a5ed8576007331c5fc88ad376e3d28b12e0276baaa68e7db8e212d572d074d",
+    "modules/security/src/main/java/io/github/aullchen/lcp/security/BoundTransfer.java": "31d20707da7ee9b0bf23074cee087be84e1c0d36c8203883b194b33b40c25faf",
+    "modules/security/src/main/java/io/github/aullchen/lcp/security/HpkeFrames.java": "45ee298c6114abd43967f8ee1f521cb475ba4f8397874a5ba8eb35cb05e0ead8",
+    "modules/security/src/main/java/io/github/aullchen/lcp/security/HpkeKey.java": "6818410405defbc55048e1c11b7c8fff33ae23d3a400fc851e41c2bafd17752c",
+    "modules/security/src/main/java/io/github/aullchen/lcp/security/PeerDirectory.java": "104157c874ff147cb6def96ee6f393c32215582998ac84191168cb65b8d8eb89",
+    "modules/security/src/main/java/io/github/aullchen/lcp/security/TlsIdentity.java": "692b25182199878ef3b4309a5772edd1c98fca37700357baf3b102c7e7c7dd6d",
+    "modules/security/src/test/java/io/github/aullchen/lcp/security/HpkeVectorTest.java": "6bac2ae38cd1b1670c1e1ef4cef74716ff16c6f66ee9f3bdb0f3516e0ec05d7f",
+    "modules/transport-http/src/main/java/io/github/aullchen/lcp/http/AuthenticatedHttpClient.java": "b45547f5464d3c6a500ec279ddd3f560484f67dcb43dc48cb3c8b69a8f46f2ce",
+    "modules/transport-http/src/main/java/io/github/aullchen/lcp/http/AuthenticatedHttpServer.java": "e412ca73c44077e7a1e2d124803f63168241a95ffeba3aa782134ff350166190",
+    "modules/transport-http/src/main/java/io/github/aullchen/lcp/http/BoundedExecutor.java": "fce3a9d1ef8d405ec70e2da800f670b231cf771a12bfd911c461895def4b72c4",
+    "modules/transport-http/src/main/java/io/github/aullchen/lcp/http/FixedTransferClient.java": "ada0498266a9ac21d4d79fd5f859f0609becc03676b6b60b08b65b4a076f7fcd",
+    "modules/transport-http/src/main/java/io/github/aullchen/lcp/http/RequestBody.java": "7503f78ec29d75c5e3035860c3fe16a8fbaf0c2d0874c0473411dc44886a34db",
+    "modules/transport-http/src/main/java/io/github/aullchen/lcp/http/RetryPolicy.java": "0e3295e1381bad780ba80d4182cba65b845b98d8d5c69f2978b4b01c92c03737",
+    "modules/transport-http/src/main/java/io/github/aullchen/lcp/http/TlsContexts.java": "df926cf4bbf291d7941c23abb19e2ffcb969912af97cbefbdc3d723c91407e27",
+    "modules/transport-http/src/main/java/io/github/aullchen/lcp/http/TransferHttpHandler.java": "b144170ba00fe1813f9812ed3b1a3d92d4bb6a6dfa6358aa8232e49597fe5573",
+    "modules/transport-http/src/test/java/io/github/aullchen/lcp/http/Certificates.java": "e56fcaa01b07d4e566ce3fe0b0d60450bff212c4b357b555363e61fd674a71e5",
+    "modules/transport-http/src/test/java/io/github/aullchen/lcp/http/HttpTransportTest.java": "a93bbbb85cb192a726db3986a7d82ee286c1b7f5275c4735ed3978457620c480",
+    "modules/transport-http/src/test/java/io/github/aullchen/lcp/http/RequestBodyTest.java": "1ecdb5c55536f6a0af4fb2439592ef045a6ebae630e185d7b49325605bab1ab4",
+    "modules/transport-http/src/test/java/io/github/aullchen/lcp/http/RetryPolicyTest.java": "f28193023fa16c4b6e548f7882b2c6337b04b2b3255332353a04354118e898cf",
+    "modules/transport-http/src/test/java/io/github/aullchen/lcp/http/SecurityTest.java": "1ab85e58df936d2a84dcede9f26d5c43b76c12f0b7777d161d9d7cf6b8a0f8ba",
+    "examples/src/main/java/io/github/aullchen/lcp/examples/AtomicFiles.java": "740b67c3693a3d6b61d8820f496836e7c516b94d1abf4683693858312b19d5cf",
+    "examples/src/main/java/io/github/aullchen/lcp/examples/FileSink.java": "38ee55712eaf5a9cc662d0e11db9ae4d2ef72f1e5de1824fa7242ccbb6c861bc",
+    "examples/src/main/java/io/github/aullchen/lcp/examples/FileSource.java": "23de2905f5cddb19f36e2606ae1f80eecc15d7c8ccbfe623a1f4c21152df1afb",
+    "examples/src/main/java/io/github/aullchen/lcp/examples/GeneratorSource.java": "59127d5a8500907725aec4192bb342a6863e280db5a380d83f679f9d53369c11",
+    "examples/src/main/java/io/github/aullchen/lcp/examples/SourceControl.java": "2278e7ba216ffcad82315b3b12d82f9c5fcd918816b01513d9e2aec03fe43440",
+    "examples/src/main/java/io/github/aullchen/lcp/examples/TransferNode.java": "41ce83076445616f1ba31a70c3ab041d647305d13bc0dc74ab4d0cd1a160bc75",
+    "examples/src/test/java/io/github/aullchen/lcp/examples/AtomicFilesTest.java": "9fc823ed93a3676702bce800238f19ab2170c8d4be8d4f6bc409a4a40fd26231",
+    "examples/src/test/java/io/github/aullchen/lcp/examples/Certificates.java": "03e3a1ef16d6277423763d280612e8d9d886230f6137cab6482fab86a8259e27",
+    "examples/src/test/java/io/github/aullchen/lcp/examples/ConcurrentStorageTest.java": "01277f71f55457e37e1a334deda4071d0e6560119903495d605cefcba98a8232",
+    "examples/src/test/java/io/github/aullchen/lcp/examples/DevelopmentCredentials.java": "9cc09f858ddd2a989664326e47713fa81687b91770a9361b778c01d4be06dc96",
+    "examples/src/test/java/io/github/aullchen/lcp/examples/ExpiryStorageTest.java": "5a52a5ca38c66982ea73a7bbe3ed7bb87d3d44ff5081864a98a9d7ff0f05ad85",
+    "examples/src/test/java/io/github/aullchen/lcp/examples/FaultExchange.java": "39486964386038839238b4b0e3db6c284ba3f819d7fb4203e154dcd5bc98f6cb",
+    "examples/src/test/java/io/github/aullchen/lcp/examples/FileSinkCrashTest.java": "48a72899de7c08796ecff072e9c555c4518cdad7ad6f5be8dbd358a23faa2ad9",
+    "examples/src/test/java/io/github/aullchen/lcp/examples/FileSinkReplayTest.java": "9e423afb561514539940543aa9bb0d099fba2ba29fd06d36ecbaa15dff9d004e",
+    "examples/src/test/java/io/github/aullchen/lcp/examples/FileSinkTest.java": "18364ae1a2021edb48020eead6906b7d6bff308ab9daef5f19947fe61b512e13",
+    "examples/src/test/java/io/github/aullchen/lcp/examples/LifecycleStorageTest.java": "da472673430f57b1ba20dd2b0660c26d9f94f443f8491ce1ad26fa26ec730e45",
+    "examples/src/test/java/io/github/aullchen/lcp/examples/SourceControlTest.java": "e7d895ffd25e967c42946dd22d142a7e3f24d4a12c62413e9c94a90ad86d4a78",
+    "examples/src/test/java/io/github/aullchen/lcp/examples/SourceTest.java": "727f79073d9ed3d05958159e6ea33f85d10a6286527982a2e9fa4793a8da6fb6",
+    "examples/src/test/java/io/github/aullchen/lcp/examples/StorageTestSupport.java": "8ba3945860079d04e0597f571046444f7d81b87eae03ec4a8b95e4bccae6b1ad",
+    "examples/src/test/java/io/github/aullchen/lcp/examples/TransferIntegrationTest.java": "65ccbf9542b1439608c456d2a6439a70f11c32f06eeee5350c4be48a9fb53fa6",
+    "examples/src/test/java/io/github/aullchen/lcp/examples/TransferNodeTest.java": "7a0d55a98c4c412891f1997df25188d5f9bbc134510766c63c15c65ecb917a8a",
+    "benchmarks/src/main/java/io/github/aullchen/lcp/examples/BenchmarkCertificates.java": "26a9090f7a8b2d9cc0083bb5968a219e00bb4d568bb3ba3bb57e9f000d0061d4",
+    "benchmarks/src/main/java/io/github/aullchen/lcp/examples/BenchmarkRun.java": "8a3bd0d186aaaaf17d345aaa4c5b72616678cb32de2c4fe9ddce8820b53f20a7",
+    "benchmarks/src/main/java/io/github/aullchen/lcp/examples/FrameAllocationRun.java": "a5aee8250840b0596d378d311ff86c837837b555668009512f321c687c9387b4",
+    "benchmarks/src/main/java/io/github/aullchen/lcp/examples/IndexScaleRun.java": "5859a73e7d2b914ca8c5b8b64edeca176089efb378190d701bc5160ee5759b99",
+    "benchmarks/src/main/java/io/github/aullchen/lcp/examples/ShapedLink.java": "02403bd519689f3e7d2efa85964900cf40b397b536bb1c82a8f49dc910bd5e54",
+    "benchmarks/src/test/java/io/github/aullchen/lcp/examples/ShapedLinkTest.java": "4278c251699952e68ac93cc1a3654c1b80661453d8e8a8b7f3e49116d17a9714"
+  },
+  "runnerSha256": "941ce0791fed932173f6c568b37622e9f13eba155ec361d7e5aa395fb627641a",
+  "interpretation": "Paired repetitions and medians are descriptive. Only consistent paired gains support follow-up; no tuning or production performance claim from three repetitions."
+}

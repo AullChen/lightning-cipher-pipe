@@ -1,0 +1,332 @@
+{
+  "completeMatrix": true,
+  "integrityAndLeases": true,
+  "dynamicCycleGate": true,
+  "v2CompressionFixed": true,
+  "counterConsistency": true,
+  "groups": [
+    {
+      "scenario": "sink",
+      "strategy": "FULL",
+      "runs": 3,
+      "successes": 3,
+      "seconds": [
+        68.256554,
+        67.5351264,
+        68.6506747
+      ],
+      "secondsMedian": 68.256554,
+      "cpuSecondsMedian": 5.734375,
+      "retries": [
+        1,
+        1,
+        1
+      ],
+      "busy": [
+        1,
+        1,
+        1
+      ],
+      "trials": {
+        "window": {
+          "Started": 9,
+          "Evaluated": 4,
+          "Retained": 4,
+          "RolledBack": 0,
+          "Interrupted": 3
+        },
+        "compression": {
+          "Started": 6,
+          "Evaluated": 6,
+          "Retained": 0,
+          "RolledBack": 6,
+          "Interrupted": 0
+        },
+        "chunk": {
+          "Started": 6,
+          "Evaluated": 6,
+          "Retained": 6,
+          "RolledBack": 0,
+          "Interrupted": 0
+        }
+      }
+    },
+    {
+      "scenario": "sink",
+      "strategy": "V2",
+      "runs": 3,
+      "successes": 3,
+      "seconds": [
+        57.4584513,
+        54.5996731,
+        48.2864013
+      ],
+      "secondsMedian": 54.5996731,
+      "cpuSecondsMedian": 5.078125,
+      "retries": [
+        2,
+        1,
+        2
+      ],
+      "busy": [
+        2,
+        1,
+        1
+      ],
+      "trials": {
+        "window": {
+          "Started": 10,
+          "Evaluated": 6,
+          "Retained": 6,
+          "RolledBack": 0,
+          "Interrupted": 3
+        },
+        "compression": {
+          "Started": 0,
+          "Evaluated": 0,
+          "Retained": 0,
+          "RolledBack": 0,
+          "Interrupted": 0
+        },
+        "chunk": {
+          "Started": 6,
+          "Evaluated": 6,
+          "Retained": 6,
+          "RolledBack": 0,
+          "Interrupted": 0
+        }
+      }
+    },
+    {
+      "scenario": "sink",
+      "strategy": "FIXED",
+      "runs": 3,
+      "successes": 3,
+      "seconds": [
+        16.2770087,
+        20.5462331,
+        19.3111298
+      ],
+      "secondsMedian": 19.3111298,
+      "cpuSecondsMedian": 3.296875,
+      "retries": [
+        0,
+        3,
+        2
+      ],
+      "busy": [
+        0,
+        3,
+        1
+      ],
+      "trials": {
+        "window": {
+          "Started": 0,
+          "Evaluated": 0,
+          "Retained": 0,
+          "RolledBack": 0,
+          "Interrupted": 0
+        },
+        "compression": {
+          "Started": 0,
+          "Evaluated": 0,
+          "Retained": 0,
+          "RolledBack": 0,
+          "Interrupted": 0
+        },
+        "chunk": {
+          "Started": 0,
+          "Evaluated": 0,
+          "Retained": 0,
+          "RolledBack": 0,
+          "Interrupted": 0
+        }
+      }
+    },
+    {
+      "scenario": "journal",
+      "strategy": "FULL",
+      "runs": 3,
+      "successes": 3,
+      "seconds": [
+        83.4931705,
+        83.3859942,
+        83.2247536
+      ],
+      "secondsMedian": 83.3859942,
+      "cpuSecondsMedian": 4.859375,
+      "retries": [
+        0,
+        0,
+        0
+      ],
+      "busy": [
+        0,
+        0,
+        0
+      ],
+      "trials": {
+        "window": {
+          "Started": 9,
+          "Evaluated": 9,
+          "Retained": 0,
+          "RolledBack": 9,
+          "Interrupted": 0
+        },
+        "compression": {
+          "Started": 9,
+          "Evaluated": 9,
+          "Retained": 0,
+          "RolledBack": 9,
+          "Interrupted": 0
+        },
+        "chunk": {
+          "Started": 6,
+          "Evaluated": 6,
+          "Retained": 6,
+          "RolledBack": 0,
+          "Interrupted": 0
+        }
+      }
+    },
+    {
+      "scenario": "journal",
+      "strategy": "V2",
+      "runs": 3,
+      "successes": 3,
+      "seconds": [
+        69.5783408,
+        69.5976865,
+        69.9138747
+      ],
+      "secondsMedian": 69.5976865,
+      "cpuSecondsMedian": 5.140625,
+      "retries": [
+        0,
+        0,
+        0
+      ],
+      "busy": [
+        0,
+        0,
+        0
+      ],
+      "trials": {
+        "window": {
+          "Started": 15,
+          "Evaluated": 12,
+          "Retained": 1,
+          "RolledBack": 11,
+          "Interrupted": 0
+        },
+        "compression": {
+          "Started": 0,
+          "Evaluated": 0,
+          "Retained": 0,
+          "RolledBack": 0,
+          "Interrupted": 0
+        },
+        "chunk": {
+          "Started": 6,
+          "Evaluated": 6,
+          "Retained": 6,
+          "RolledBack": 0,
+          "Interrupted": 0
+        }
+      }
+    },
+    {
+      "scenario": "journal",
+      "strategy": "FIXED",
+      "runs": 3,
+      "successes": 3,
+      "seconds": [
+        45.5214128,
+        45.4079988,
+        45.3911384
+      ],
+      "secondsMedian": 45.4079988,
+      "cpuSecondsMedian": 4.53125,
+      "retries": [
+        0,
+        0,
+        0
+      ],
+      "busy": [
+        0,
+        0,
+        0
+      ],
+      "trials": {
+        "window": {
+          "Started": 0,
+          "Evaluated": 0,
+          "Retained": 0,
+          "RolledBack": 0,
+          "Interrupted": 0
+        },
+        "compression": {
+          "Started": 0,
+          "Evaluated": 0,
+          "Retained": 0,
+          "RolledBack": 0,
+          "Interrupted": 0
+        },
+        "chunk": {
+          "Started": 0,
+          "Evaluated": 0,
+          "Retained": 0,
+          "RolledBack": 0,
+          "Interrupted": 0
+        }
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "scenario": "sink",
+      "baseline": "FULL",
+      "pairedTimeImprovementPercent": [
+        15.8198767256841,
+        19.153667120403878,
+        29.66361727541769
+      ],
+      "medianTimeImprovementPercent": 20.008160535030818,
+      "everyPairFaster": true
+    },
+    {
+      "scenario": "sink",
+      "baseline": "FIXED",
+      "pairedTimeImprovementPercent": [
+        -253.0037512359381,
+        -165.74055124488976,
+        -150.0444137659931
+      ],
+      "medianTimeImprovementPercent": -182.7368137725427,
+      "everyPairFaster": false
+    },
+    {
+      "scenario": "journal",
+      "baseline": "FULL",
+      "pairedTimeImprovementPercent": [
+        16.66582981179281,
+        16.535519942268674,
+        15.993894032988763
+      ],
+      "medianTimeImprovementPercent": 16.53551994226867,
+      "everyPairFaster": true
+    },
+    {
+      "scenario": "journal",
+      "baseline": "FIXED",
+      "pairedTimeImprovementPercent": [
+        -52.847498617178246,
+        -53.27186473586676,
+        -54.02538284873684
+      ],
+      "medianTimeImprovementPercent": -53.27186473586676,
+      "everyPairFaster": false
+    }
+  ],
+  "diagnosticGate": true
+}
