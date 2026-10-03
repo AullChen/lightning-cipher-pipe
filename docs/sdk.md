@@ -122,4 +122,4 @@ System.out.println(result.handleId() + " " + result.totalPlainBytes());
 | 尚未交付 | 数据库适配、业务导入、UI、多任务调度、发布自动化 |
 | 性能结论 | 五策略评测和简化复测完成，未证实预定研究收益 |
 
-测试入口、逐项证据与未覆盖范围见[实现状态](development-progress.md)。
+测试命令见[项目首页](../README.md#验证与复现)，研究结果见[实验索引](experiments/README.md)。

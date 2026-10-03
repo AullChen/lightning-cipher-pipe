@@ -37,7 +37,7 @@ def main():
          'java':subprocess.check_output([java,'-version'],stderr=subprocess.STDOUT,text=True),
          'sources':{p.relative_to(ROOT).as_posix():digest(p) for base in [ROOT/'modules',ROOT/'examples/src',ROOT/'benchmarks/src']
                     for p in sorted(base.rglob('*.java')) if 'target' not in p.parts},
-         'runnerSha256':digest(Path(__file__)),'protocolSha256':digest(ROOT/'docs/window-adaptation-protocol.md')})
+         'runnerSha256':digest(Path(__file__)),'protocolSha256':digest(ROOT/'docs/window-study-protocol.md')})
     results=[]
     for name,strategy,repeat in cases:
         command=[java]+flags+['-cp',os.pathsep.join(map(str,[ROOT/'benchmarks/target/classes',ROOT/'benchmarks/target/lib/*'])),

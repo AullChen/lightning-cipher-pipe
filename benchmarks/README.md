@@ -56,7 +56,7 @@ RSS is sampled every 50 ms and includes the OS process high-water mark where ava
 
 ## Frozen pipeline reevaluation
 
-[D01](../docs/feedback-refinement.md) retains policy v1. Use `run.py --output benchmarks/results/pipeline-v1 --processors 4` with each phase to keep a separate evidence set and a fixed JVM processor count. The remaining heap, buffer, data and repetition settings retain the registered protocol. `analyze.py --output benchmarks/results/pipeline-v1 --report docs/experiments/pipeline-v1` refuses to overwrite an existing published report. Verify the input manifest before reuse; evaluation starts only after the new training selection is frozen. Cross-report timings are not a controlled pipeline A/B comparison.
+[Pipeline protocol](../docs/pipeline-protocol.md) retains policy v1. Use `run.py --output benchmarks/results/pipeline-v1 --processors 4` with each phase to keep a separate evidence set and a fixed JVM processor count. The remaining heap, buffer, data and repetition settings retain the registered protocol. `analyze.py --output benchmarks/results/pipeline-v1 --report docs/experiments/pipeline-v1` refuses to overwrite an existing published report. Verify the input manifest before reuse; evaluation starts only after the new training selection is frozen. Cross-report timings are not a controlled pipeline A/B comparison.
 
 ## Complete control-cycle diagnostics
 
@@ -64,11 +64,11 @@ RSS is sampled every 50 ms and includes the OS process high-water mark where ava
 
 ## Policy v2 comparison
 
-After building with `mvnw -Pbenchmarks package -DskipTests`, run `python benchmarks/policy_v2.py NEW_OUTPUT`. The approved matrix contains 18 fresh JVMs: FULL-v1, V2 and FIXED × sink/journal × three repetitions, with rotated strategy order, identical 512 MiB input and resource limits. FIXED here is 1 MiB/window 4/level 3, not the previously trained B1. Both dynamic groups use the diagnostic 1 MiB chunk ceiling. The script retains all outcomes, stops on correctness/process failure, and requires completed window/chunk evaluations. `--summarize` recomputes descriptive paired comparisons from an existing directory without rerunning transfers. Do not run builds or other load tests concurrently with the measurement.
+After building with `mvnw -Pbenchmarks package -DskipTests`, run `python benchmarks/policy_v2.py NEW_OUTPUT`. The comparison matrix contains 18 fresh JVMs: FULL-v1, V2 and FIXED × sink/journal × three repetitions, with rotated strategy order, identical 512 MiB input and resource limits. FIXED here is 1 MiB/window 4/level 3, not the previously trained B1. Both dynamic groups use the diagnostic 1 MiB chunk ceiling. The script retains all outcomes, stops on correctness/process failure, and requires completed window/chunk evaluations. `--summarize` recomputes descriptive paired comparisons from an existing directory without rerunning transfers. Do not run builds or other load tests concurrently with the measurement.
 
 ## Changing receiver capacity: window-only research study
 
-The [frozen protocol](../docs/window-adaptation-protocol.md) asks whether existing window feedback reduces initial-configuration sensitivity while staying within 10% of the best measured fixed window. It compares F1/F2/F4 with v2 A1/A4 in 15 fresh JVMs; all groups use identical chunks, compression, input and a 4 → 1 → 4 admission-capacity trace. This is an isolated window experiment, not a new policy or a rerun of the B1 matrix.
+The [frozen protocol](../docs/window-study-protocol.md) asks whether existing window feedback reduces initial-configuration sensitivity while staying within 10% of the best measured fixed window. It compares F1/F2/F4 with v2 A1/A4 in 15 fresh JVMs; all groups use identical chunks, compression, input and a 4 → 1 → 4 admission-capacity trace. This is an isolated window experiment, not a new policy or a rerun of the B1 matrix.
 
 Set `JAVA_HOME` to JDK 17 and use Python 3.10+:
 

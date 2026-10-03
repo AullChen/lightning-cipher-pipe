@@ -6,7 +6,7 @@
 
 2026-10-01，Windows 11 / Microsoft OpenJDK 17.0.7；每次独立 JVM，固定 4 个可用处理器、堆 128–768 MiB。源、目标、TLS 代理同一 JVM；每端字节预算 512 MiB、元数据预算 8 MiB，真实 TLS/HPKE、FileSink 写入/force、最终重读 SHA-256 验证。主机没有 CPU 排他隔离，期间存在短时验证负载，时间仅作诊断描述，不作性能验收或跨报告比较。
 
-固定种子 104729，交替写入 64 KiB 零字节与 CPython random.randbytes 熵块。压力输入 16 MiB，控制周期输入 512 MiB；大小与摘要见 [manifest.json](manifest.json)。执行前固定全部 30 个组合及顺序，不重试失败进程、不丢弃样本。完整记录见 [results.json](results.json)，门禁与聚合见 [summary.json](summary.json)。源码以 manifest 中逐 Java 文件 SHA-256 标识，基于 `37149f2` 加本轮生命周期修复及独立诊断入口。
+固定种子 104729，交替写入 64 KiB 零字节与 CPython random.randbytes 熵块。压力输入 16 MiB，控制周期输入 512 MiB；大小与摘要见 [manifest.json](manifest.json)。执行前固定全部 30 个组合及顺序，不重试失败进程、不丢弃样本。完整记录见 [results.json](results.json)，门禁与聚合见 [summary.json](summary.json)。源码以 manifest 中逐 Java 文件 SHA-256 标识，基于 `37149f2` 加生命周期修复及独立诊断入口。
 
 - 压力矩阵：固定 256 KiB 块、ZSTD 3；窗口 1/2/4 × stable/sink/journal × 3 次，共 27 次。每轮旋转窗口次序。sink 在载荷写入后延迟 80 ms；journal 在持有回执日志锁时延迟 80 ms；stable 不注入延迟。
 - 控制周期：FULL-v1 / sink，初始 256 KiB、窗口 1、ZSTD 3；认证范围 256 KiB–1 MiB、窗口 1–4、ZSTD 1–5，三次。限制最大块使有限输入包含足够 ACK；不改变每轮至少 16 ACK / 2 秒、两轮评估及两轮冷却的规则。
@@ -50,7 +50,7 @@ BUSY 表示一次非阻塞准入失败，不区分预算、槽位或生命周期
 
 30 次全部 COMPLETED，输出 SHA-256 与输入一致，两端许可归零。生命周期回归另在父实现分别复现 EXPIRED 和 UNKNOWN_COMMIT，修复后完整 `-Pbenchmarks verify` 通过 367 项测试。诊断不是负载测试或多主机验证。
 
-在原报告范围外，本次补上了三维控制周期可完整执行的证据，也否定了直接以 persistShare 阈值降窗的简单方案。研究收益目标仍未完成；具体的[可选 v2 提案](../../feedback-v2-proposal.md)需单独确认，默认 v1 不变。
+在原报告范围外，本次补上了三维控制周期可完整执行的证据，也否定了直接以 persistShare 阈值降窗的简单方案。研究收益目标仍未完成；具体的[v2 设计](../../policy-v2.md)及其对照实验承接这一问题，默认 v1 不变。
 
 ## 复现
 

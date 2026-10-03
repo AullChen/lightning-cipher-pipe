@@ -2,7 +2,7 @@
 
 本报告区分实现正确性与性能收益。所有组共用真实认证、FileSink 持久回执、Finish 重读及完整输出 SHA-256 校验。结果只适用于下述受控环境。
 
-本轮按 [D01 冻结协议](../../feedback-refinement.md)执行，使用源码 `af099a0`，每个 JVM 均固定 `-XX:ActiveProcessorCount=4`。五策略共用完成补位管线与帧处理优化；[原实验及负面结果](../feedback-v1/README.md)保留。两轮资源配置不同，不能用新旧绝对耗时推导管线或算法的因果收益。
+实验按 [共同管线协议](../../pipeline-protocol.md)执行，使用源码 `af099a0`，每个 JVM 均固定 `-XX:ActiveProcessorCount=4`。五策略共用完成补位管线与帧处理优化；[原实验及负面结果](../feedback-v1/README.md)保留。两轮资源配置不同，不能用新旧绝对耗时推导管线或算法的因果收益。
 
 ## 方法与数据
 
