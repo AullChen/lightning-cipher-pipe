@@ -1,28 +1,31 @@
-# Research question and frozen changing-capacity experiment
+# 接收容量变化下的窗口实验协议
 
-Status: protocol frozen before measurement; existing policy v2 is unchanged.
+研究问题：在线窗口反馈如何降低初值敏感性，并将传输耗时控制在最佳实测固定窗口附近？测量使用既有 v2 及固定阈值，原测量版本和摘要保存在[实验档案](experiments/window-adaptation-v1/README.md)。
 
-Question: when a receiver temporarily reduces its admissible chunk concurrency and the sender does not know the appropriate window in advance, can existing lightweight window feedback reduce the cost of choosing a fixed configuration, while keeping transfer time close to the best measured fixed window?
+本文是冻结协议的方法整理版，补充 BUSY 和决策计时的实际采集口径。测量前原文保存在 Git 对象 `5d419ef:docs/window-adaptation-protocol.md`，可用 `git show 5d419ef:docs/window-adaptation-protocol.md` 查阅。原文将 BUSY 记录描述为原处理器与闸门两类；实际采集为源端 BUSY 响应总数与闸门拒绝数，原因分类扩展见[后续计划](roadmap.md)。
 
-## Controlled comparison
+## 对照与环境
 
-- Five strategies: fixed windows F1/F2/F4; policy v2 with initial window 1 (A1) or 4 (A4), range 1–4. Three repetitions, strategy order rotated by repetition: 15 fresh JVMs. No selection of the best adaptive starting point after measurement.
-- All strategies use the exact same 256 MiB deterministic mixed input, fixed 256 KiB chunks, fixed ZSTD level 3, actual TLS/HPKE, FileSink force and Finish verification. Thus all successful transfers contain 1024 chunks. Only the window can change; no chunk-size or compression advantage is introduced.
-- A receiver admission gate accepts at most 4 concurrent chunk requests during [0,12) seconds, at most 1 during [12,28), and 4 thereafter. Epoch is the sender transfer invocation, before Open. Accepted requests drain when capacity drops; no in-flight work is cancelled. Rejected requests receive authenticated BUSY with Retry-After 1, as in the existing reference handler. Each admitted chunk has an additional 80 ms payload-write delay. The sender receives neither the schedule nor the current capacity.
-- This is an explicit simulation of receiver admission capacity, not a claim to model all real disks or networks. The advertised maximum remains 4. Original handler BUSY and injected gate BUSY are recorded separately.
-- The workload cannot finish before the recovery boundary even at the ideal gate service rate: (4×12+1×16)/0.08 = 800 chunks < 1024, ignoring every other cost. Transfers therefore see both changes. Late recovery may still be right-censored by EOF; do not extend individual inputs to improve the result.
-- Every JVM: 4 processors, heap 128–768 MiB; each peer buffer budget 512 MiB, metadata budget 8 MiB; Limits frame 300000, plaintext 262144, maxChunks 4096, maxInFlight 4. Same code, pipeline, security, budgets, input and trace for all strategies. No concurrent builds/load tests during measurement. One process has a 300-second timeout; keep failures and stop on correctness/resource violations.
+- 五组：固定窗口 F1/F2/F4；v2 初始窗口 1（A1）或 4（A4），范围 1–4。各重复三次，每次独立 JVM，组次序按重复轮次旋转，共 15 次。
+- 所有组使用同一 256 MiB 确定性混合输入、256 KiB 块、ZSTD 3、TLS/HPKE、真实 FileSink force 与 Finish 重读。每次完成 1024 块，仅窗口参与调整。
+- 接纳闸门以调用 transfer、开始 Open 前为时间原点：[0,12) 秒并发上限 4，[12,28) 秒为 1，之后为 4。已接纳请求自然排空，拒绝响应为认证 BUSY、Retry-After 1。每个接纳块在真实载荷写入后增加 80 ms 等待。发送端仅依靠协议响应观察压力。
+- 模型隔离接纳容量变化，公告上限保持 4。分别采集源端 BUSY 响应数与闸门拒绝数；两项观测口径及实例见报告。
+- 理想服务上限为 (4×12+1×16)/0.08 = 800 块，小于 1024；各组均经历两次容量变化。观察截至数据确认完成，输入长度对所有样本固定。
+- JVM 4 个可用处理器、堆 128–768 MiB；每端缓冲 512 MiB、元数据 8 MiB。Limits：帧 300000、明文 262144、maxChunks 4096、maxInFlight 4。各组共享源码、管线、安全与预算。
+- 测量时段专用于本矩阵。每进程期限 300 秒，异常结果完整保留；正确性或资源检查触发停止时，归档该次结果。
 
-## Outcomes fixed in advance
+## 预先固定的指标
 
-1. Completion time, per-repetition excess time relative to the fastest of F1/F2/F4 (a retrospective reference, not a deployable oracle), and the range of performance across initial windows. Report both A1 and A4, not their minimum.
-2. Control response: after 12 s, first sampled physical window ≤1 sustained for ≥2 s; after 28 s, first window ≥3 sustained for ≥2 s. These are response metrics, not new policy thresholds. End the data stage at the first sample whose confirmed bytes equal the input size; do not count the Finish verification tail as sustained adaptation. If no sustained response before that boundary/end of the phase, mark it censored rather than zero. A window already in the requested band is reported separately from a reactive adjustment. Fixed windows do not have an adaptation time.
-3. Sample every 250 ms: receiver capacity/active requests, confirmed bytes, physical window, rolling last-64 valid ACK P95, pressure, retries and trial counters. Throughput is confirmed-byte difference divided by actual sample interval; the ACK P95 is not an interval P95 or network RTT. Plot intervals at their midpoint; align all panels to the same monotonic elapsed time. Samples around phase boundaries can mix regimes and are not evidence of instantaneous causal attribution.
-4. Additional cost: decision CPU nanoseconds, process CPU time, retries/retried frame bytes, number of started/evaluated/rolled-back/interrupted window trials. Sample instrumentation is identical across strategies; its own cost is not separately isolated.
-5. Correctness gates: SHA-256 and byte/chunk count match, leases zero, all 15 outcomes retained. Report incomplete cycles and failures; do not interpret a smaller file or omitted failed run as higher throughput.
+1. 完成时间：按同轮最快 F1/F2/F4 计算额外耗时，报告 A1 与 A4 两种初值。最佳固定作为事后比较参考。
+2. 响应时间：12 秒后窗口首次 ≤1 且持续至少 2 秒；28 秒后首次 ≥3 且持续至少 2 秒。数据阶段截止于确认字节等于输入大小的首个样本，验证尾段独立处理。观察结束时仍待发生的响应记为右删失；条件变化前已在区间内的样本单列。固定策略记录窗口配置。
+3. 轨迹：每 250 ms 记录接纳容量、活动请求、确认字节、物理窗口、最近 64 个有效 ACK 的滚动 P95、压力、重试和试探计数。吞吐为字节差分除以实际间隔，绘于间隔中点；所有面板共用单调时间轴。跨阶段采样区间按混合阶段观测解读。
+4. 成本：控制调用累计经过时间、进程 CPU、重试与重试帧字节，以及试探启动、评估、回退和中止计数。原协议字段“decision CPU nanoseconds”按 System.nanoTime 的经过时间解读。各组使用同一采样工具。
+5. 正确性：SHA-256、字节和块数一致，最终租约归零；全部 15 个结果及完整控制周期状态共同保存。
 
-One multi-panel figure uses repetition 0, selected before measurements: imposed capacity, actual window, throughput and rolling ACK P95. All repetitions' raw traces accompany the figure. Tables use all three repetitions. Do not select a visually favorable run or claim statistical significance from three repetitions.
+机制图使用测量前选定的第 0 轮：容量、窗口、吞吐与滚动 ACK P95。表格使用全部三次重复，原始轨迹随报告归档。统计采用描述性比较。
 
-## Interpretation and scope
+## 验收口径与后续研究
 
-Before measurement, define acceptable time cost as no more than 10% excess completion time versus the best fixed window in each paired repetition, for BOTH adaptive starts in ALL three repetitions. Compare start sensitivity using abs(T1-T4)/min(T1,T4) for adaptive versus fixed endpoints; require the adaptive value to be lower in every repetition. These operational criteria are not a significance test. Passing them would support a further, separately frozen study. Beating only a poorly selected fixed window is insufficient: compare with every fixed configuration and the best fixed reference. A1/A4 sensitivity, slow recovery, repeated failed probes or being slower than all sensible fixed windows are negative evidence. This experiment evaluates the existing v2 with fixed thresholds and pressure signals.
+预设耗时条件为 A1、A4 在全部三轮中，相对各轮最佳固定的额外完成时间均 ≤10%。初值敏感性为 abs(T1-T4)/min(T1,T4)，要求每轮自适应端点敏感性小于固定端点。
+
+两个条件共同组成验收目标。逐个固定配置、两种自适应初值及最佳固定参考均完整报告。后续研究以独立冻结的协议扩展重复次数、外部方法与使用场景，结合完整周期和压力轨迹分析控制收益。

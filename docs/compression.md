@@ -1,12 +1,12 @@
 # 独立 ZSTD 块与启动示例
 
-`lcp-compression-zstd` 固定使用 zstd-jni 1.5.7-16。将 `ZstdCompression` 传给发送器与目标 handler 即启用 ZSTD；不注入时仍可独立使用内置 NONE。Open 按源端 offers 顺序选择共同支持的编码，整个传输保持该编码。ZSTD 等级为 1–5，无字典、跨块历史或原生线程池。
+`lcp-compression-zstd` 固定使用 zstd-jni 1.5.7-16。将 `ZstdCompression` 传给发送器与目标 handler 即启用 ZSTD；内置 NONE 可独立使用。Open 按源端 offers 顺序选择共同支持的编码，整个传输保持该编码。ZSTD 等级为 1–5，各块独立编码，采用单线程原生调用。
 
-每块只压缩一次，`PreparedChunk` 保留不可变压缩字节；后续封装使用相同描述符与压缩内容。Finish 不压缩。双方按 compressBound 加 4160 字节完整帧开销检查协商结果，并在读取前预留整块生命周期空间。ZSTD 在已有显式缓冲峰值外另预留 32 MiB 工作区，固定 windowLog=23、hashLog=20、chainLog=20、workers=0。此预算不代表 JVM RSS。
+每块只压缩一次，`PreparedChunk` 保留不可变压缩字节；后续封装使用相同描述符与压缩内容。Finish 直接封装。双方按 compressBound 加 4160 字节完整帧开销检查协商结果，并在读取前预留整块生命周期空间。ZSTD 在已有显式缓冲峰值外另预留 32 MiB 工作区，固定 windowLog=23、hashLog=20、chainLog=20、workers=0。此预算计量应用工作区，进程 RSS 另行观测。
 
-接收端在 HPKE 验证后解压。只接受一个标准 ZSTD frame，检查内容长度、实际输出、最多 8 MiB 的窗口和输出，拒绝拼接帧、skippable frame、非零字典 ID 和尾随字节。没有声明内容长度的合法帧仍受认证 AAD 的输出上限约束；不以固定压缩比拒绝高重复输入。
+接收端在 HPKE 验证后解压。只接受一个标准 ZSTD frame，检查内容长度、实际输出、最多 8 MiB 的窗口和输出，拒绝拼接帧、skippable frame、非零字典 ID 和尾随字节。内容长度省略时，合法帧仍受认证 AAD 的输出上限约束；高重复输入同样按输出上限校验。
 
-原生调用前后检查中断和截止时间，原生调用期间不承诺 Java 中断能立即终止工作。输入、输出、窗口、等级及并发槽位共同限制一次调用的工作量；调用退出前不能释放其所有权或预算。
+原生调用在入口和出口检查中断与截止时间。输入、输出、窗口、等级及并发槽位共同限制一次调用的工作量；所有权与预算持续保留至调用退出。
 
 实现依据：[Zstandard 帧格式](https://github.com/facebook/zstd/blob/v1.5.7/doc/zstd_compression_format.md)、[zstd-jni](https://github.com/luben/zstd-jni/tree/v1.5.7-16)。
 
@@ -16,7 +16,7 @@
 
 参考配置为 `examples/config/source.properties` 和 `target.properties`。路径相对启动目录，未知键直接拒绝。支持 FileSource 或 GeneratorSource，二者使用同一异步发送入口。启动器支持 FIXED 和 [FEEDBACK](feedback.md)，默认 FIXED；两端通过 `inFlightChunks` 配置 1–16 的窗口，输出配置窗口、协商后的实际窗口和 transferId，完成时输出 handleId 与字节数。
 
-源配置必须指定 `controlRecord`，如 `./run/source-control.cbor`。同一个控制路径只能由一个源进程持有。源重启先查询旧任务：已完成则报告旧结果，未完成则确认取消后以新 ID 重读输入。主动发起另一笔传输应使用新的控制路径；控制文件不是可删除的缓存，未知或损坏的记录不会被覆盖。
+源配置必须指定 `controlRecord`，如 `./run/source-control.cbor`。同一个控制路径只能由一个源进程持有。源重启先查询旧任务：已完成则报告旧结果，未完成则确认取消后以新 ID 重读输入。主动发起另一笔传输应使用新的控制路径；控制文件作为持久恢复依据保存，格式异常或损坏时保留原记录供核查。
 
 目标可配置 `verificationTimeoutMillis`（默认 600000）与 `shutdownGraceMillis`（默认 60000）。HTTP 响应与后台校验采用独立期限，VERIFYING 状态允许查询和取消。
 
@@ -34,4 +34,4 @@ java -Dsun.net.httpserver.maxReqTime=660 -Dsun.net.httpserver.maxRspTime=660 -Dj
 java -cp "examples/target/classes;examples/target/dependency/*" io.github.aullchen.lcp.examples.TransferNode source examples/config/source.properties
 ```
 
-输出保存在配置的 Sink 根目录下，以 transferId 隔离。测试使用临时生成的证书与密钥，在两个真实 JVM 中启动相同入口并比对输出；示例不内置可部署的私钥或 trust-all 模式。
+输出保存在配置的 Sink 根目录下，以 transferId 隔离。测试使用临时生成的证书与密钥，在两个真实 JVM 中启动相同入口并比对输出；演示身份按次生成，连接使用显式信任库。

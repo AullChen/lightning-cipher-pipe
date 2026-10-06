@@ -37,4 +37,4 @@ Open 认证策略版本、参数范围和初始值。反馈支持 256 KiB–8 Mi
 
 ## 实验
 
-[二维策略比较](experiments/policy-v2/README.md)在 sink/journal 诊断中观察到 v2 相对 v1 的中位完成时间下降 20.0% / 16.5%，相对同场景固定对照的时间代价为 182.7% / 53.3%。[窗口研究](experiments/window-adaptation-v1/README.md)隔离块大小和压缩因素，分析初值敏感性、压力退让与容量恢复。两项研究均保留固定配置对照、全部样本及配置范围。
+[二维策略比较](experiments/policy-v2/README.md)在 sink/journal 诊断中观察到 v2 相对 v1 的中位完成时间下降 20.0% / 16.5%。[窗口研究](experiments/window-adaptation-v1/README.md)隔离块大小和压缩因素，分析初值敏感性、压力退让与容量恢复。两项研究均保留固定配置对照、全部样本及配置范围；进一步提升完成时间的安排见[后续计划](roadmap.md)。

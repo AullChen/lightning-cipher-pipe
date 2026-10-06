@@ -8,7 +8,7 @@
 
 源端使用 `AuthenticatedHttpClient` 和 `FixedTransferClient`。`start(URI, OpenRequest, TransferSource)` 返回 `CompletionStage<VerifiedResult>`；也提供阻塞式 `transfer`。URI 必须是 HTTPS 的 `/lcp-stream/v1/transfers`。发送器读取未知长度输入，依次分块、摘要、HPKE 封装并核对目标 receipt，直到 EOF 后生成 Finish。
 
-被接受的调用持有输入源，成功或失败都会关闭一次。异步提交遭执行器拒绝时，输入仍由调用方持有。传输结束后关闭发送器；HTTP 客户端、服务端和 Sink 的生命周期由调用方管理。源进程退出后不从旧偏移续传；使用下述恢复入口查询旧事实，再决定是否创建新任务。
+被接受的调用持有输入源，成功或失败都会关闭一次。异步提交遭执行器拒绝时，输入仍由调用方持有。传输结束后关闭发送器；HTTP 客户端、服务端和 Sink 的生命周期由调用方管理。源进程重启后使用下述恢复入口查询旧事实：已完成任务返回原结果，确认取消或失败后可用新任务和完整输入开始传输。
 
 ## 端点
 
@@ -16,7 +16,7 @@
 | --- | --- |
 | `POST` 集合路径（无末尾斜杠） | 新 Open 持久接纳后 201；相同请求重放返回原响应 200 |
 | `PUT /{id}/chunks/{index}` | 认证和范围检查后提交；返回持久 receipt |
-| `GET /{id}/receipts?from=0&limit=256` | 按索引范围分页，稀疏空页不代表结束 |
+| `GET /{id}/receipts?from=0&limit=256` | 按索引范围分页，稀疏空页后继续遍历剩余索引 |
 | `POST /{id}/finish` | 冻结写入、保存清单、重读验证并返回完成状态 |
 | `GET /{id}` | 查询持久状态、计数和可空结果 |
 | `POST /{id}/cancel` | 保存取消命令；幂等重放不会删除输出 |
@@ -33,34 +33,34 @@
 
 Finish 在 receipt 数量、偏移连续性与总长度吻合后进入 VERIFYING。引擎以 64 KiB 缓冲重读持久数据，逐块重算 SHA-256 与 Merkle 根，并检查最后一字节后的 EOF；仅一致时持久记录 COMPLETED。相同 Finish 重放返回既有结果，不再次验证；不同命令或清单返回 COMMAND_CONFLICT。重读失败不会产生完成结果。
 
-整块生命周期预留取两项峰值的较大者：数据处理为 `8 × maxFrameBytes + 2 × maxPlainBytes + 65536 + codecWorkspace`；对账为 `256 KiB + maxPlainBytes + compressBound(maxPlainBytes)`。后者覆盖控制响应及仍持有的明文与压缩材料，避免小帧配置低估预算。ZSTD 工作区详见[压缩与启动示例](compression.md)。独立控制消息预留 256 KiB。FileSink 的索引和源端 receipt 历史分别受 `metadataBudget` 约束，启动时要求 `maxChunks × 52 ≤ metadataBudget`；源端以紧凑数组保存全部已分配描述符与确认标志，不保留历史载荷。发送器的重载构造器接受元数据预算，默认 128 MiB。这些是应用缓冲上限，不是 JVM RSS 承诺；TLS、线程栈和运行时仍有固定开销。
+整块生命周期预留取两项峰值的较大者：数据处理为 `8 × maxFrameBytes + 2 × maxPlainBytes + 65536 + codecWorkspace`；对账为 `256 KiB + maxPlainBytes + compressBound(maxPlainBytes)`。后者覆盖控制响应及仍持有的明文与压缩材料，避免小帧配置低估预算。ZSTD 工作区详见[压缩与启动示例](compression.md)。独立控制消息预留 256 KiB。FileSink 的索引和源端 receipt 历史分别受 `metadataBudget` 约束，启动时要求 `maxChunks × 52 ≤ metadataBudget`；源端以紧凑数组保存全部已分配描述符与确认标志，不保留历史载荷。发送器的重载构造器接受元数据预算，默认 128 MiB。这些上限计量应用缓冲；JVM RSS 另包含 TLS、线程栈和运行时开销。
 
 ## 对账与重试
 
-网络超时或响应丢失不能证明写入未发生。发送器停止新读取，等待本轮工作线程退出，然后查询状态及全部已分配索引的 receipt；每页最多 256 个索引，稀疏空页仍继续核对。历史 ACK 对应的索引、偏移、长度和摘要必须仍然存在且一致。缺失或变化时停止本次发送并报告 UNKNOWN_COMMIT，不重读源、不生成替代块，也不发布成功。
+网络超时或响应丢失后，提交事实通过持久回执确认。发送器停止新读取，等待本轮工作线程退出，然后查询状态及全部已分配索引的 receipt；每页最多 256 个索引，稀疏空页仍继续核对。历史 ACK 对应的索引、偏移、长度和摘要必须仍然存在且一致。缺失或变化时停止本次发送并报告 UNKNOWN_COMMIT，保持块身份与错误语义一致。
 
-查到当前未确认块的 receipt 后直接确认；仅缺失的块重发。每块保留原压缩材料和预算，每次重新建立 HPKE 上下文，最多 4 次发送（含首次与 BUSY）。三次退避基数为 500 ms、1 s、2 s，乘以 0.5–1.5 的抖动；尊重 BUSY 的 Retry-After，等待上限 10 s 且不超过剩余 TTL。状态和每页查询也各自最多尝试 4 次。对账失败不会继续发送新块。
+查到当前未确认块的 receipt 后直接确认；仅缺失的块重发。每块保留原压缩材料和预算，每次重新建立 HPKE 上下文，最多 4 次发送（含首次与 BUSY）。三次退避基数为 500 ms、1 s、2 s，乘以 0.5–1.5 的抖动；尊重 BUSY 的 Retry-After，等待上限 10 s 且不超过剩余 TTL。状态和每页查询也各自最多尝试 4 次。对账完成后再恢复发送新块。
 
-认证、格式、完整性、范围冲突和 UNKNOWN_COMMIT 不自动重试。发送耗尽后再次对账仍有缺块时，发送器尝试一次取消并报告未知结果；取消未确认时不得复用 transferId。完成态响应丢失后只接受与原 Finish 清单完全一致的持久 COMPLETED 结果；VERIFYING 可在有界查询内等待，不能当作成功。
+认证、格式、完整性、范围冲突和 UNKNOWN_COMMIT 直接报告给调用方。发送耗尽后再次对账仍有缺块时，发送器尝试一次取消并报告未知结果；取消确认之前保留原 transferId 及控制记录。完成态响应丢失后只接受与原 Finish 清单完全一致的持久 COMPLETED 结果；VERIFYING 可在有界查询内等待，成功以持久 COMPLETED 为准。
 
 ## 到期收尾
 
-目标在认证状态查询、写入入场及新任务接纳时检查写入期限；启动器也检查持久活动任务。到期的 OPEN/TRANSFERRING 停止新写入，等待已接纳 I/O 退出后持久记录 FAILED/EXPIRED，保留载荷及 receipt，再允许新任务接纳。排空失败或超时记录 RECOVERY_REQUIRED，不把不确定写入当作已安全结束。已经接纳的 VERIFYING 仍使用独立校验期限。源恢复先判断权威 COMPLETED/FAILED/CANCELLED 状态，即使缺少 Accepted 也不先重放过期 Open；RECOVERY_REQUIRED 仍停止恢复。
+目标在认证状态查询、写入入场及新任务接纳时检查写入期限；启动器也检查持久活动任务。到期的 OPEN/TRANSFERRING 停止新写入，等待已接纳 I/O 退出后持久记录 FAILED/EXPIRED，保留载荷及 receipt，再允许新任务接纳。排空失败或超时记录 RECOVERY_REQUIRED，保留现场供后续恢复核查。已经接纳的 VERIFYING 仍使用独立校验期限。源恢复先判断权威 COMPLETED/FAILED/CANCELLED 状态，即使缺少 Accepted 也不先重放过期 Open；RECOVERY_REQUIRED 仍停止恢复。
 
 ## 生命周期恢复
 
 Finish 持久记录完整清单及 VERIFYING 后，由单个后台校验器重读输出。快速完成返回 200，否则返回 202；同一 Finish 不启动第二个校验器。启动器扫描并恢复唯一待校验任务，认证状态查询也可触发恢复。校验拥有独立许可，HTTP 响应结束不释放它；源端等待完成状态，已接纳的校验不受写入 TTL 到期中断。
 
-Cancel 先禁止新块，再等待在途写入或读取退出。它与完成记录串行竞争：取消获胜时记录 CANCELLED，迟到的校验结果不能改回 COMPLETED；完成先持久化时返回原结果。两种情况均保留输出。等待超时记录 RECOVERY_REQUIRED，已运行操作仍保留其范围、缓冲和许可。
+Cancel 先禁止新块，再等待在途写入或读取退出。它与完成记录串行竞争：取消获胜时记录 CANCELLED，迟到的校验结果保持 CANCELLED 终态；完成先持久化时返回原结果。两种情况均保留输出。等待超时记录 RECOVERY_REQUIRED，已运行操作仍保留其范围、缓冲和许可。
 
-`FixedTransferClient.recover(endpoint, request, accepted)` 供源进程重新启动后使用：查询到 COMPLETED 时返回既有状态；确认旧任务取消或失败后返回 null，此时才可使用新 transferId 和从头开始的新 Source。已持久接纳的任务消失或处于 RECOVERY_REQUIRED 时停止。未记录 Open 响应时，尝试重放相同 Open 取得取消所需的绑定；若请求已过期或原写入身份失效，则保留旧控制记录并报告错误，不猜测成功。
+`FixedTransferClient.recover(endpoint, request, accepted)` 供源进程重新启动后使用：查询到 COMPLETED 时返回既有状态；确认旧任务取消或失败后返回 null，此时才可使用新 transferId 和从头开始的新 Source。已持久接纳的任务消失或处于 RECOVERY_REQUIRED 时停止。未记录 Open 响应时，尝试重放相同 Open 取得取消所需的绑定；若请求已过期或原写入身份失效，则保留旧控制记录并报告错误，完成结果以权威状态为准。
 
-`start`/`transfer` 的 OpenObserver 重载在接受事实验证后、首次读取前回调；宿主可在这里持久记录 AcceptedTransfer。示例另在 Open 前保存意图，并在结果后更新控制文件，不保存块文件或旧偏移。已完成记录的再次启动仍查询目标事实，不打开新的输入。
+`start`/`transfer` 的 OpenObserver 重载在接受事实验证后、首次读取前回调；宿主可在这里持久记录 AcceptedTransfer。示例另在 Open 前保存意图，并在结果后更新控制文件，以任务事实驱动恢复。已完成记录的再次启动仍查询目标事实，不打开新的输入。
 
-`close()` 默认等待 60 秒，发送器另提供 `close(Duration)`。关闭会停止新读取并关闭 Source，超时报告未知结果；仍运行的消费者继续拥有许可，FileSink 的根目录锁也保留到实际 I/O 退出。调用者须保留运行时并在工作退出后再次关闭，不能在超时后复用相关资源。
+`close()` 默认等待 60 秒，发送器另提供 `close(Duration)`。关闭会停止新读取并关闭 Source，超时报告未知结果；仍运行的消费者继续拥有许可，FileSink 的根目录锁也保留到实际 I/O 退出。调用者须保留运行时并在工作退出后再次关闭，相关资源在工作退出后统一释放。
 
-异步 `start` 提交成功即接管 Source。取消排队任务立即关闭输入且不读取；取消运行任务关闭输入并停止准备新块，已发出的消费者退出前保留缓冲区与字节许可。`cancel(true)` 还请求中断源工作线程；Future 已取消不代表资源已经排空或远端已确认取消。提交被拒绝时 Source 仍归调用方。
+异步 `start` 提交成功即接管 Source。取消排队任务立即关闭输入且不读取；取消运行任务关闭输入并停止准备新块，已发出的消费者退出前保留缓冲区与字节许可。`cancel(true)` 还请求中断源工作线程；资源排空由消费者退出确认，远端取消由持久状态确认。提交被拒绝时 Source 仍归调用方。
 
-对账先检查权威状态，再独立比较连续回执页的版本，不能以状态文件版本作为回执页的下界。分页期间允许新增回执；任何已确认描述符缺失、变化或回执版本回退仍报告 UNKNOWN_COMMIT。
+对账先检查权威状态，再独立比较连续回执页的版本，状态版本与回执页版本使用各自独立的比较序列。分页期间允许新增回执；任何已确认描述符缺失、变化或回执版本回退仍报告 UNKNOWN_COMMIT。
 
 发送协调器按完成顺序核对回执、回收许可并补充新块，慢块不阻塞其他空闲槽位。出现不确定响应时暂停新读取，先排空在途消费者，再对账并优先重试；取消和异常仍等待实际消费者退出后释放缓冲。FIXED 与 FEEDBACK 共用该管线，反馈调整只影响新准备的块。
