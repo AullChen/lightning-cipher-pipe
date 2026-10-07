@@ -28,6 +28,6 @@ JDK HTTP 参考适配器使用固定线程数、有界队列和拒绝策略。�
 
 自动化测试的证书密钥位于测试进程或隔离临时目录中；开发演示生成器将短期密钥写入指定的新目录，详见 [SDK 指南](sdk.md)。仓库中的 RFC 私钥字节是公开标准向量，用于标准一致性测试，部署身份由独立密钥管理流程生成。
 
-连接认证、持久 ACK 与完成结果分别具有明确语义：目标在持久写入后确认 receipt，在输出重读和最终承诺一致后发布 COMPLETED。当前已支持持久接纳、分页对账、有界重试、目标校验恢复及源控制记录恢复；业务导入由宿主衔接，扩展方向见[后续计划](roadmap.md)。
+目标在持久写入后确认 receipt，重读输出并核对最终承诺后发布 COMPLETED。连接身份由 TLS 双向认证核验。当前已支持持久接纳、分页对账、有界重试、目标校验恢复及源控制记录恢复；业务导入由宿主负责，扩展方向见[后续计划](roadmap.md)。
 
 参考：[RFC 9180](https://www.rfc-editor.org/rfc/rfc9180)、[Bouncy Castle HPKE API](https://downloads.bouncycastle.org/java/docs/bcprov-jdk18on-javadoc/org/bouncycastle/crypto/hpke/HPKE.html)、[JDK HTTP 服务端配置](https://github.com/openjdk/jdk17u/blob/master/src/jdk.httpserver/share/classes/sun/net/httpserver/ServerConfig.java)。
